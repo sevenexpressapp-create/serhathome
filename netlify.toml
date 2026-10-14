@@ -1,18 +1,25 @@
-# Netlify yayın ayarı — YAYIN YAPILMADI, bu dosya hazırlık (ayrı onay gerekir).
+# Netlify yayın ayarı.
 #
-# Yayın kökü `dashboard/`: içinde yalnız statik dosyalar var ve `config.js`
-# `.gitignore`'da olduğu için depoya hiç girmiyor. Netlify'da config.js
-# ortam değişkeninden değil, yayın öncesi elle oluşturulur
-# (bkz. docs/SUPABASE-KURULUM.md §7).
+# Yayın kökü `dashboard/`. İçindeki `config.js` depoya GİRMEZ (.gitignore) —
+# Netlify derleme sırasında `tools/netlify-build.sh` onu ortam
+# değişkenlerinden üretir. Ayrıca `_headers` içindeki CSP joker alan adı
+# gerçek proje adresine daraltılır; böylece proje ref'i herkese açık depoda
+# durmaz, yalnız yayınlanan çıktıda olur.
 #
-# Güvenlik başlıkları `dashboard/_headers` dosyasında (CSP, HSTS, çerçeve
-# yasağı). Netlify ikisini de okur; başlıkları tek yerde tutmak için burada
-# tekrar edilmiyor.
+# Gerekli ortam değişkenleri (Netlify > Site configuration > Environment variables):
+#   SUPABASE_URL       https://<proje-ref>.supabase.co
+#   SUPABASE_ANON_KEY  "anon public" anahtar — service_role ASLA
+#
+# Değişken eksikse ya da yanlışlıkla service_role anahtarı konmuşsa derleme
+# DÜŞER. Çalışmayan veya gevşek CSP'li bir panel yayınlamaktansa doğrusu bu.
+# Betik ürettiği çıktıyı ayrıca ölçer (kum havuzu ölçümü 15.10.2026: eksik
+# değişken, service_role, doğru anahtar ve mutasyon senaryoları koşuldu).
 
 [build]
   publish = "dashboard"
-  command = ""
+  command = "bash tools/netlify-build.sh"
 
+# Tek sayfalık panel: bilinmeyen yollar index.html'e döner.
 [[redirects]]
   from = "/*"
   to = "/index.html"

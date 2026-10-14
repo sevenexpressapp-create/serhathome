@@ -1,9 +1,13 @@
 # Netlify güvenlik başlıkları (ORTA-1). Bu dosya `dashboard/` yayın köküyle
 # birlikte gider; Netlify onu okuyup her yanıta bu başlıkları ekler.
 #
-# ⚠️ connect-src: proje açılınca `*.supabase.co` yerine TAM proje adresi
-# yazılmalı (`https://<PROJE_REF>.supabase.co`). Joker, panelin yanlışlıkla
-# başka bir Supabase projesine veri göndermesini engellemez.
+# ⚠️ connect-src'deki joker alan adı YAYINDA kalmaz: tools/netlify-build.sh
+# derleme sırasında onu tam proje adresiyle değiştirir ve değiştiğini ölçer.
+# Depodaki bu sürüm yerel geliştirme içindir. Joker, panelin yanlışlıkla başka
+# bir Supabase projesine veri göndermesini engellemez.
+#
+# NOT: bu yoruma joker deseni BİREBİR yazılmaz — derleme kapısı dosyada o
+# deseni arıyor ve yorumdaki metin ölçümü kirletiyordu.
 #
 # style-src'de 'unsafe-inline' var çünkü panel `el.style.background = ...` ile
 # satır-içi stil ATAMASI yapıyor (grafik renkleri, gün düğmeleri). Script
