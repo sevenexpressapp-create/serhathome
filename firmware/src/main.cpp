@@ -18,7 +18,19 @@
 #include "sensor.h"
 #include "store.h"
 
-static const char* FW_VERSION = "kombi-fw 0.1.0-faz1";
+// --- BENZETIM KOMUTU KAPISI (YUKSEK-1) --------------------------------------
+// `sim temp/fault/time`, `wifi on|off` ve `wdtest` komutlari USB'si eline gecen
+// birine roleyi surdurur. Bu yuzden benzetim YALNIZ gelistirme ortaminda
+// derlenebilir: `platformio.ini`'deki [env:esp32dev] -DKOMBI_DEV_BUILD=1 verir,
+// [env:esp32dev_prod] ise -DKOMBI_ALLOW_SIM=0. Sablon varsayilani da 0.
+#ifndef KOMBI_ALLOW_SIM
+#define KOMBI_ALLOW_SIM 0
+#endif
+#if KOMBI_ALLOW_SIM && !defined(KOMBI_DEV_BUILD)
+#error "KOMBI_ALLOW_SIM=1 yalniz gelistirme derlemesinde (KOMBI_DEV_BUILD) kullanilabilir. Kalici montaj icin: pio run -e esp32dev_prod"
+#endif
+
+static const char* FW_VERSION = "kombi-fw 0.2.0-faz1";
 static const uint32_t WDT_TIMEOUT_S = 30;
 static const uint32_t STATUS_PERIOD_MS = 5000;
 static const uint32_t WIFI_RETRY_BASE_MS = 10000;
@@ -42,6 +54,7 @@ static uint32_t last_status_ms = 0;
 static uint32_t sensor_reads_ok = 0;
 static uint32_t sensor_reads_fail = 0;
 static uint32_t relay_switches = 0;
+static uint32_t nvs_writes = 0;   // Y1: her turda NVS yazilmadigi OLCULEBILSIN
 static bool relay_prev = false;
 static String line_buf;
 
@@ -94,6 +107,7 @@ static kombi::Clock readClock() {
 
 static void persist() {
   settings = ctrl.settings();
+  nvs_writes++;
   if (!store.save(settings, rules)) Serial.println(F("[NVS] YAZMA BASARISIZ"));
 }
 
@@ -101,17 +115,25 @@ static void printStatus() {
   const kombi::Clock c = readClock();
   char tbuf[20] = "yok";
   if (c.valid) snprintf(tbuf, sizeof(tbuf), "%02u:%02u/gun%u", c.hour, c.minute, c.weekday);
+  char okuma[12] = "yok";
+  if (ctrl.hasReading()) snprintf(okuma, sizeof(okuma), "%.1f", ctrl.lastTempC());
+  char kural[24] = "-";
+  if (ctrl.ruleActive())
+    snprintf(kural, sizeof(kural), "%02u:%02u", ctrl.activeRuleHour(), ctrl.activeRuleMinute());
+  else if (ctrl.manualOverride() && rules.count > 0)
+    snprintf(kural, sizeof(kural), "elle");
   Serial.printf(
-      "STATE t=%.1f h=%.1f target=%.1f band=%.1f heat=%d pad=%s reason=%s sensor=%s "
-      "clock=%s susp=%d rules=%u wifi=%s cloud=%s up=%lus sw=%lu ok=%lu fail=%lu\n",
-      ctrl.lastTempC(), ctrl.lastHumidity(), ctrl.effectiveTarget(), ctrl.settings().hysteresis_c,
+      "STATE t=%s h=%.1f target=%.1f taban=%.1f kural=%s band=%.1f heat=%d pad=%s reason=%s sensor=%s "
+      "clock=%s susp=%d rules=%u wifi=%s cloud=%s up=%lus sw=%lu nvs=%lu ok=%lu fail=%lu\n",
+      okuma, ctrl.lastHumidity(), ctrl.effectiveTarget(), ctrl.baseTarget(), kural,
+      ctrl.settings().hysteresis_c,
       ctrl.heatRequested() ? 1 : 0, digitalRead(PIN_RELAY) ? "HIGH" : "LOW",
       kombi::reasonName(ctrl.reason()), ctrl.sensorFault() ? "ARIZA" : "ok", tbuf,
       ctrl.rulesSuspended() ? 1 : 0, (unsigned)rules.count,
       WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str()
                                     : (wifi_enabled ? "down" : "kapali"),
       cloud.configured() ? (cloud.lastOk() ? "ok" : "hata") : "ayarsiz",
-      (unsigned long)(millis() / 1000), (unsigned long)relay_switches,
+      (unsigned long)(millis() / 1000), (unsigned long)relay_switches, (unsigned long)nvs_writes,
       (unsigned long)sensor_reads_ok, (unsigned long)sensor_reads_fail);
 }
 
@@ -146,49 +168,75 @@ static void serviceWifi(uint32_t now) {
 static void serviceCloud(uint32_t now) {
   if (!cloud.due(now)) return;
   DeviceReport rep;
+  // Y7 — GECERLI OKUMA YOKKEN UYDURMA DEGER GONDERILMEZ. Eskiden 0.0 gidiyordu;
+  // bulutta `temp_c=0`, panelde "DONMA RISKI" ve Faz 2 alarmi yanlis sebeple
+  // calisiyordu. Okuma yoksa alan NULL gider.
+  rep.has_reading = ctrl.hasReading();
   rep.temp_c = ctrl.lastTempC();
   rep.humidity = ctrl.lastHumidity();
   rep.relay_on = ctrl.heatRequested();
   rep.sensor_ok = !ctrl.sensorFault();
   rep.time_valid = readClock().valid;
   rep.rules_suspended = ctrl.rulesSuspended();
-  rep.target_c = ctrl.effectiveTarget();
+  rep.target_c = ctrl.effectiveTarget();   // YURURLUKTEKI hedef
+  rep.base_target_c = ctrl.baseTarget();   // kullanicinin/bulutun yazdigi taban
+  rep.rule_active = ctrl.ruleActive();
+  rep.active_rule_hour = ctrl.ruleActive() ? (int)ctrl.activeRuleHour() : -1;
+  rep.active_rule_minute = ctrl.ruleActive() ? (int)ctrl.activeRuleMinute() : -1;
   rep.reason = kombi::reasonName(ctrl.reason());
   rep.uptime_s = millis() / 1000;
   rep.wifi_rssi = WiFi.RSSI();
   rep.fw_version = FW_VERSION;
 
   kombi::Settings ns;
-  kombi::RuleSet nr;
+  kombi::RuleSet nr{};  // Y1: ILKLENDIR. Ilklendirilmemis dizi memcmp'te her
+                        // turda "degisti" dedirtiyordu (belirsiz deger okuma).
   bool has_settings = false;
   if (!cloud.sync(now, rep, ns, nr, has_settings)) {
     Serial.printf("[bulut] basarisiz (%s), hata sayisi=%lu\n", cloud.lastError().c_str(),
                   (unsigned long)cloud.failures());
     return;
   }
-  bool changed = false;
-  if (has_settings) {
-    const kombi::Settings cur = ctrl.settings();
-    if (cur.target_c != ns.target_c || cur.hysteresis_c != ns.hysteresis_c ||
-        cur.freeze_guard_c != ns.freeze_guard_c || cur.manual_mode != ns.manual_mode ||
-        cur.min_relay_hold_s != ns.min_relay_hold_s || cur.sensor_timeout_s != ns.sensor_timeout_s) {
-      ctrl.setSettings(ns);
-      changed = true;
-    }
-  }
-  if (nr.count != rules.count || memcmp(nr.rules, rules.rules, sizeof(rules.rules)) != 0) {
-    rules = nr;
-    ctrl.setRules(rules);
-    changed = true;
-  }
-  if (changed) {
-    Serial.println(F("[bulut] ayar/kural guncellendi -> NVS"));
+  // Uygulama mantigi CEKIRDEKTE (kombi_core): birim testi ve olcum kosumu
+  // (tools/core_cli) ayni kodu kullansin. Yalniz GERCEKTEN degisen deger
+  // NVS'e yazilir.
+  const kombi::CloudApply a =
+      kombi::applyCloudState(ctrl, rules, has_settings ? &ns : nullptr, &nr);
+  if (a.needs_persist) {
+    Serial.printf("[bulut] %s%sguncellendi -> NVS\n", a.settings_changed ? "ayar " : "",
+                  a.rules_changed ? "kural " : "");
     persist();
   }
 }
 
 // ---------------------------------------------------------------------------
 // Seri konsol. Faz 1 kabul testleri bunun uzerinden OLCULUYOR.
+// O6 — KONSOL GIRDI DOGRULAMASI. `cmd.substring(..).toFloat()` gecersiz metni
+// sessizce 0'a ceviriyor, clampSettings de onu 5.0'a kirpiyordu: `target abc`
+// hedefi sessizce 5 °C yapardi. Artik sayi olmayan girdi REDDEDILIR.
+static bool parseFloatArg(const String& cmd, int from, float& out) {
+  String arg = cmd.substring(from);
+  arg.trim();
+  if (arg.length() == 0) return false;
+  char* end = nullptr;
+  const float v = strtof(arg.c_str(), &end);
+  if (end == arg.c_str() || *end != '\0') return false;
+  if (v != v) return false;  // NaN
+  out = v;
+  return true;
+}
+
+static bool parseIntArg(const String& cmd, int from, long& out) {
+  String arg = cmd.substring(from);
+  arg.trim();
+  if (arg.length() == 0) return false;
+  char* end = nullptr;
+  const long v = strtol(arg.c_str(), &end, 10);
+  if (end == arg.c_str() || *end != '\0') return false;
+  out = v;
+  return true;
+}
+
 static void handleCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
@@ -209,8 +257,9 @@ static void handleCommand(String cmd) {
                   FW_VERSION, sensor.name(), PIN_DHT, PIN_RELAY,
                   boot_pad_level ? "HIGH" : "LOW", nvs_loaded ? "yuklendi" : "varsayilan",
                   WiFi.macAddress().c_str());
-    Serial.printf("acilis_sebebi=%d role_seviyeleri: ON=%d OFF=%d\n", (int)esp_reset_reason(),
-                  kombi::RELAY_LEVEL_ON, kombi::RELAY_LEVEL_OFF);
+    Serial.printf("acilis_sebebi=%d role_seviyeleri: ON=%d OFF=%d SIM=%d TLS_DOGRULAMA=%d\n",
+                  (int)esp_reset_reason(), kombi::RELAY_LEVEL_ON, kombi::RELAY_LEVEL_OFF,
+                  KOMBI_ALLOW_SIM, ALLOW_INSECURE_TLS ? 0 : 1);
     return;
   }
   if (cmd == "nvs") { store.dump(Serial); return; }
@@ -221,46 +270,57 @@ static void handleCommand(String cmd) {
     return;
   }
   if (cmd.startsWith("target ")) {
+    float v = 0;
+    if (!parseFloatArg(cmd, 7, v)) { Serial.println(F("HATA: sayi bekleniyor")); return; }
     kombi::Settings s = ctrl.settings();
-    s.target_c = cmd.substring(7).toFloat();
+    s.target_c = v;
     ctrl.setSettings(s);
     persist();
     Serial.printf("hedef=%.1f (NVS'e yazildi)\n", ctrl.effectiveTarget());
     return;
   }
   if (cmd.startsWith("band ")) {
+    float v = 0;
+    if (!parseFloatArg(cmd, 5, v)) { Serial.println(F("HATA: sayi bekleniyor")); return; }
     kombi::Settings s = ctrl.settings();
-    s.hysteresis_c = cmd.substring(5).toFloat();
+    s.hysteresis_c = v;
     ctrl.setSettings(s);
     persist();
     Serial.printf("bant=%.1f\n", ctrl.settings().hysteresis_c);
     return;
   }
   if (cmd.startsWith("freeze ")) {
+    float v = 0;
+    if (!parseFloatArg(cmd, 7, v)) { Serial.println(F("HATA: sayi bekleniyor")); return; }
     kombi::Settings s = ctrl.settings();
-    s.freeze_guard_c = cmd.substring(7).toFloat();
+    s.freeze_guard_c = v;
     ctrl.setSettings(s);
     persist();
     Serial.printf("donma esigi=%.1f\n", ctrl.settings().freeze_guard_c);
     return;
   }
   if (cmd.startsWith("hold ")) {
+    long v = 0;
+    if (!parseIntArg(cmd, 5, v) || v < 0 || v > 65535) { Serial.println(F("HATA: 0-65535 sn bekleniyor")); return; }
     kombi::Settings s = ctrl.settings();
-    s.min_relay_hold_s = (uint16_t)cmd.substring(5).toInt();
+    s.min_relay_hold_s = (uint16_t)v;
     ctrl.setSettings(s);
     persist();
     Serial.printf("asgari bekleme=%u sn\n", ctrl.settings().min_relay_hold_s);
     return;
   }
   if (cmd.startsWith("timeout ")) {
+    long v = 0;
+    if (!parseIntArg(cmd, 8, v) || v < 0 || v > 65535) { Serial.println(F("HATA: 0-65535 sn bekleniyor")); return; }
     kombi::Settings s = ctrl.settings();
-    s.sensor_timeout_s = (uint16_t)cmd.substring(8).toInt();
+    s.sensor_timeout_s = (uint16_t)v;
     ctrl.setSettings(s);
     persist();
     Serial.printf("sensor zaman asimi=%u sn\n", ctrl.settings().sensor_timeout_s);
     return;
   }
   if (cmd.startsWith("manual ")) {
+    if (!cmd.endsWith("on") && !cmd.endsWith("off")) { Serial.println(F("kullanim: manual on|off")); return; }
     kombi::Settings s = ctrl.settings();
     s.manual_mode = cmd.endsWith("on");
     ctrl.setSettings(s);
@@ -290,6 +350,11 @@ static void handleCommand(String cmd) {
     float tgt = 0;
     if (sscanf(cmd.c_str() + 9, "%d %d %d %f", &mask, &hh, &mm, &tgt) != 4) {
       Serial.println(F("kullanim: rule add <maske 1-127> <saat> <dakika> <hedef>"));
+      return;
+    }
+    if (mask < 1 || mask > 127 || hh < 0 || hh > 23 || mm < 0 || mm > 59 || tgt < 5.0f ||
+        tgt > 30.0f) {
+      Serial.println(F("HATA: maske 1-127, saat 0-23, dakika 0-59, hedef 5-30"));
       return;
     }
     if (rules.count >= kombi::MAX_RULES) { Serial.println(F("kural listesi dolu")); return; }
@@ -383,6 +448,12 @@ void setup() {
                 boot_pad_level ? "HIGH" : "LOW", kombi::RELAY_LEVEL_OFF ? "HIGH" : "LOW",
                 digitalRead(PIN_RELAY) ? "HIGH" : "LOW");
 
+  // YUKSEK-1 kanit satiri: flash'lanmis kartta benzetim komutlarinin acik olup
+  // olmadigi GOZLE gorulebilsin. SIM=1 ise USB'si eline gecen biri roleyi surebilir.
+  Serial.printf("GUVENLIK: SIM=%d (benzetim komutlari %s), TLS_DOGRULAMA=%d\n", KOMBI_ALLOW_SIM,
+                KOMBI_ALLOW_SIM ? "ACIK - yalniz gelistirme" : "KAPALI",
+                ALLOW_INSECURE_TLS ? 0 : 1);
+
   settings = kombi::defaultSettings();
   if (store.begin()) {
     nvs_loaded = store.load(settings, rules);
@@ -428,10 +499,12 @@ void loop() {
     if (r.valid) sensor_reads_ok++; else sensor_reads_fail++;
     const bool heat = ctrl.update(now, r, readClock());
     applyRelay(heat);
-    if (ctrl.consumeTargetChanged()) {
-      Serial.printf("[senaryo] hedef kuralla degisti -> %.1f (NVS'e yaziliyor)\n",
-                    ctrl.effectiveTarget());
-      persist();
+    if (ctrl.consumeEffectiveChanged()) {
+      // DIKKAT: NVS'e YAZILMAZ. Kural TABAN hedefi degistirmiyor; yururlukteki
+      // hedef her acilista kural listesinden yeniden hesaplanir (§K1/§K2).
+      Serial.printf("[senaryo] yururlukteki hedef -> %.1f (taban %.1f, kaynak %s)\n",
+                    ctrl.effectiveTarget(), ctrl.baseTarget(),
+                    ctrl.ruleActive() ? "kural" : (ctrl.manualOverride() ? "elle" : "taban"));
     }
   }
 

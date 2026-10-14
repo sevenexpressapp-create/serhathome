@@ -37,11 +37,14 @@ const char* reasonName(HeatReason r) {
 Settings defaultSettings() {
   Settings s;
   s.target_c = 21.0f;
-  s.hysteresis_c = 3.0f;     // gerekce: kombi_core.h'deki yorum (DHT11 1 °C cozunurluk)
+  s.hysteresis_c = 3.0f;     // gerekce: kombi_core.h'deki MIN_BAND_C yorumu
   s.freeze_guard_c = 6.0f;   // plan §5: oda < 6 °C ise hedeften bagimsiz zorla isit
   s.manual_mode = false;
   s.min_relay_hold_s = 300;  // 5 dk: kombiyi sik ac-kapa yipratmasin
-  s.sensor_timeout_s = 120;  // DHT11 2 sn'de bir okunur -> 60 ardisik basarisizlik
+  // DHT11 2 sn'de bir okunur ve ARALIKLI kacirmasi normaldir. 10 sn (eski taban)
+  // = 5 kacan okuma "ariza" sayilirdi; isi kesilir ve donma korumasi devre disi
+  // kalirdi. 60 sn alt sinir = en az 30 ardisik basarisizlik.
+  s.sensor_timeout_s = 120;
   return s;
 }
 
@@ -51,10 +54,15 @@ bool clampSettings(Settings& s) {
   // surekli cekili tutmasin" diye var (plan §5 "role istekte takildi" satirinin
   // yazilim tarafi).
   s.target_c = clampf(s.target_c, 5.0f, 30.0f, changed);
-  s.hysteresis_c = clampf(s.hysteresis_c, 0.5f, 6.0f, changed);
+  s.hysteresis_c = clampf(s.hysteresis_c, MIN_BAND_C, MAX_BAND_C, changed);
   s.freeze_guard_c = clampf(s.freeze_guard_c, 4.0f, 12.0f, changed);
+  // Donma esigi HEDEFIN ALTINDA kalmak zorunda (aksi halde zorla isitma
+  // kullanici hedefini anlamsiz kilar). Ayni kisit semada da var:
+  // device_settings.freeze_guard_c <= target_c - 0.5
+  const float freeze_max = s.target_c - FREEZE_BELOW_TARGET_MIN_C;
+  if (s.freeze_guard_c > freeze_max) { s.freeze_guard_c = freeze_max; changed = true; }
   s.min_relay_hold_s = clampu16(s.min_relay_hold_s, 0, 1800, changed);
-  s.sensor_timeout_s = clampu16(s.sensor_timeout_s, 10, 3600, changed);
+  s.sensor_timeout_s = clampu16(s.sensor_timeout_s, 60, 3600, changed);
   return changed;
 }
 
@@ -75,6 +83,27 @@ uint8_t sanitizeRules(RuleSet& rs) {
   return dropped;
 }
 
+bool settingsEqual(const Settings& a, const Settings& b) {
+  return a.target_c == b.target_c && a.hysteresis_c == b.hysteresis_c &&
+         a.freeze_guard_c == b.freeze_guard_c && a.manual_mode == b.manual_mode &&
+         a.min_relay_hold_s == b.min_relay_hold_s && a.sensor_timeout_s == b.sensor_timeout_s;
+}
+
+bool rulesEqual(const RuleSet& a, const RuleSet& b) {
+  if (a.count != b.count) return false;
+  // YALNIZ dolu yuvalar. `memcmp` tum diziyi okudugu icin bos yuvalardaki
+  // belirsiz baytlar her turda "farkli" dedirtiyordu (olculdu: default-init
+  // sonrasi 96/96 bayt sifir-olmayan) ve her turda NVS yaziliyordu.
+  for (uint8_t i = 0; i < a.count; i++) {
+    const Rule& x = a.rules[i];
+    const Rule& y = b.rules[i];
+    if (x.enabled != y.enabled || x.days_mask != y.days_mask || x.hour != y.hour ||
+        x.minute != y.minute || x.target_c != y.target_c) {
+      return false;
+    }
+  }
+  return true;
+}
 
 // --- Kalici hafiza paketlemesi -----------------------------------------------
 
@@ -173,18 +202,39 @@ void Controller::begin(const Settings& s, uint32_t now_ms) {
   sensor_fault_ = false;
   freeze_latched_ = false;
   rules_suspended_ = false;
-  target_changed_ = false;
+  effective_changed_ = false;
   has_switched_ = false;
+  safety_recovery_ = false;
+  effective_target_c_ = settings_.target_c;
+  rule_active_ = false;
+  active_rule_hour_ = 0;
+  active_rule_minute_ = 0;
+  override_active_ = false;
+  cur_rule_key_ = -1;
+  cur_rule_age_ = -1;
+  ovr_rule_key_ = -1;
+  ovr_rule_age_ = -1;
   begin_ms_ = now_ms;
   last_good_ms_ = now_ms;
   last_switch_ms_ = now_ms;
-  last_rule_key_ = -1;
-  last_seen_minute_ = -1;
 }
 
 void Controller::setSettings(const Settings& s) {
+  const float old_target = settings_.target_c;
   settings_ = s;
   clampSettings(settings_);
+  if (settings_.target_c != old_target) {
+    // ELLE (panel/konsol/bulut) hedef degisikligi: yururlukteki kural
+    // tetiklenmesini gecersiz kil. Bir sonraki kural tetiklendiginde (ya da
+    // ayni kural yeniden tetiklendiginde) otomatik olarak duser.
+    override_active_ = true;
+    ovr_rule_key_ = cur_rule_key_;
+    ovr_rule_age_ = cur_rule_age_;
+  }
+  // Taban hedef degisti; kural devrede degilse yururlukteki hedef de hemen
+  // guncellenmeli (bir sonraki update() zaten yeniden hesaplar, ama panelden
+  // gelen degisiklik aninda gorunsun).
+  if (!rule_active_ || override_active_) effective_target_c_ = settings_.target_c;
 }
 
 void Controller::setRules(const RuleSet& rs) {
@@ -192,49 +242,110 @@ void Controller::setRules(const RuleSet& rs) {
   sanitizeRules(rules_);
 }
 
-bool Controller::consumeTargetChanged() {
-  bool v = target_changed_;
-  target_changed_ = false;
+bool Controller::consumeEffectiveChanged() {
+  bool v = effective_changed_;
+  effective_changed_ = false;
   return v;
 }
 
-void Controller::applyRules(uint32_t /*now_ms*/, const Clock& c) {
+int Controller::findActiveRule(const Clock& c, int32_t* occ_minute) const {
+  const int now_min = (int)c.hour * 60 + (int)c.minute;
+  // Gun gun GERIYE git: bugunun gecmis kurallari, yoksa dunun, ... en cok 7 gun.
+  // Ilk eslesen gun kazanir; o gun icinde EN SON saat, esitlikte listedeki
+  // SON kural kazanir (plan §2 cakisma kurali).
+  //
+  // Neden geriye? "17:00 -> 25" kurali 17:00'de bir kez tetiklenip bitmez;
+  // ERTESI kural gelene kadar YURURLUKTEDIR. Kenar tetikleme (hour==... &&
+  // minute==...) elektrik kesintisinde, NTP sicramasinda ya da 60 sn'den uzun
+  // bir dongu takilmasinda kurali tamamen DUSURUYORDU (§K2).
+  for (int back = 0; back < 7; back++) {
+    const int wd = ((int)c.weekday - back + 7) % 7;
+    int best = -1;
+    int best_min = -1;
+    for (uint8_t i = 0; i < rules_.count; i++) {
+      const Rule& r = rules_.rules[i];
+      if (!r.enabled) continue;
+      if (((r.days_mask >> wd) & 0x01) == 0) continue;
+      const int rm = (int)r.hour * 60 + (int)r.minute;
+      if (back == 0 && rm > now_min) continue;  // bugun henuz gelmedi
+      if (rm >= best_min) { best_min = rm; best = (int)i; }
+    }
+    if (best >= 0) {
+      if (occ_minute) *occ_minute = (int32_t)wd * 1440 + (int32_t)best_min;
+      return best;
+    }
+  }
+  if (occ_minute) *occ_minute = -1;
+  return -1;
+}
+
+void Controller::applyRules(const Clock& c) {
+  const float before = effective_target_c_;
+  const bool rule_before = rule_active_;
+
   // Manuel mod: saatli kurallar TAMAMEN durur (plan §2 "kalici manuel mod").
   if (settings_.manual_mode || rules_.count == 0) {
     rules_suspended_ = false;
-    return;
-  }
-  // Saat bilinmiyorsa kurallar ASKIDA — yanlis saatte kombi tetiklemektense hic
-  // tetiklememek (plan §3, bilincli sinir). Termostat son hedefle surer.
-  if (!c.valid) {
+    rule_active_ = false;
+    cur_rule_key_ = -1;
+    cur_rule_age_ = -1;
+    override_active_ = false;  // gecersiz kilinacak kural yok
+    effective_target_c_ = settings_.target_c;
+  } else if (!c.valid) {
+    // Saat bilinmiyorsa kurallar ASKIDA — yanlis saatte kombi tetiklemektense hic
+    // tetiklememek (plan §3, bilincli sinir). Termostat TABAN hedefle surer.
     rules_suspended_ = true;
-    return;
-  }
-  rules_suspended_ = false;
+    rule_active_ = false;
+    effective_target_c_ = settings_.target_c;
+  } else {
+    rules_suspended_ = false;
+    int32_t occ = -1;
+    const int idx = findActiveRule(c, &occ);
+    const int32_t now_abs = (int32_t)c.weekday * 1440 + (int32_t)c.hour * 60 + (int32_t)c.minute;
+    const int32_t key = idx < 0 ? -1 : ((int32_t)idx * 10080 + occ);
+    const int32_t age = idx < 0 ? -1 : ((now_abs - occ) + 10080) % 10080;
 
-  const int32_t minute_key = (int32_t)c.weekday * 10000 + (int32_t)c.hour * 100 + (int32_t)c.minute;
-  if (minute_key != last_seen_minute_) {
-    last_seen_minute_ = minute_key;
-    last_rule_key_ = -1;  // yeni dakika -> tetikleme kilidi acilir
-  }
-  if (last_rule_key_ == minute_key) return;  // bu dakika zaten uygulandi
+    // Elle gecersiz kilma yalniz O TETIKLENME icin gecerlidir.
+    if (override_active_) {
+      if (key != ovr_rule_key_) override_active_ = false;          // baska kural devrede
+      else if (age >= 0 && ovr_rule_age_ >= 0 && age < ovr_rule_age_)
+        override_active_ = false;                                   // ayni kural YENIDEN tetiklendi
+    }
+    cur_rule_key_ = key;
+    cur_rule_age_ = age;
 
-  // Cakisma kurali (plan §2): listedeki SON uyan kural kazanir.
-  int match = -1;
-  for (uint8_t i = 0; i < rules_.count; i++) {
-    const Rule& r = rules_.rules[i];
-    if (!r.enabled) continue;
-    if (((r.days_mask >> c.weekday) & 0x01) == 0) continue;
-    if (r.hour != c.hour || r.minute != c.minute) continue;
-    match = i;
+    if (idx < 0 || override_active_) {
+      rule_active_ = false;
+      effective_target_c_ = settings_.target_c;
+    } else {
+      rule_active_ = true;
+      active_rule_hour_ = rules_.rules[idx].hour;
+      active_rule_minute_ = rules_.rules[idx].minute;
+      effective_target_c_ = rules_.rules[idx].target_c;
+      // Kural hedefi de guvenli aralikta olmali (sanitizeRules zaten suzuyor,
+      // bu ikinci kapi: kural listesi baska bir yoldan gelirse de tutar).
+      if (effective_target_c_ < 5.0f) effective_target_c_ = 5.0f;
+      if (effective_target_c_ > 30.0f) effective_target_c_ = 30.0f;
+    }
   }
-  if (match < 0) return;
 
-  last_rule_key_ = minute_key;
-  if (settings_.target_c != rules_.rules[match].target_c) {
-    settings_.target_c = rules_.rules[match].target_c;
-    clampSettings(settings_);
-    target_changed_ = true;  // main.cpp bunu gorup NVS'e yazar
+  if (effective_target_c_ != before || rule_active_ != rule_before) effective_changed_ = true;
+}
+
+void Controller::setHeat(bool on, uint32_t now_ms, bool arm_hold) {
+  if (heat_ == on) return;
+  heat_ = on;
+  // arm_hold=false: EMNIYET yolu (sensor arizasi / donma korumasi). Bu yollar
+  // asgari beklemeyi atlar AMA bekleme saatini de SIFIRLAMAZ. Eskiden ariza
+  // dali her donguda `last_switch_ms_`i yeniliyordu; ariza kalkinca ev soguk
+  // olsa bile role 5 dk daha kilitli kaliyordu (ve DHT11 aralikli ariza
+  // verirse hic acilmiyordu). Emniyet geciktirilmez, toparlanma cezalandirilmaz.
+  if (arm_hold) {
+    has_switched_ = true;
+    last_switch_ms_ = now_ms;
+    safety_recovery_ = false;  // konfor anahtarlamasi: tek seferlik izin tukendi
+  } else {
+    safety_recovery_ = true;   // emniyet anahtarlamasi: donusu bekletme
   }
 }
 
@@ -242,35 +353,51 @@ bool Controller::decide(uint32_t now_ms) {
   // 1) Henuz hic gecerli okuma yok: guvenli taraf kapali.
   if (!has_reading_) {
     reason_ = sensor_fault_ ? HeatReason::SensorFault : HeatReason::Boot;
-    if (heat_) { heat_ = false; has_switched_ = true; last_switch_ms_ = now_ms; }
+    setHeat(false, now_ms, false);
     return heat_;
   }
 
-  // 2) Sensor arizasi: korlemesine isitmak da riskli -> ISI ISTEGI KESILIR.
-  //    Asgari bekleme suresini BILINCLI olarak atlar; emniyet geciktirilmez.
+  const bool freeze_demand =
+      last_temp_c_ < settings_.freeze_guard_c ||
+      (freeze_latched_ && last_temp_c_ < settings_.freeze_guard_c + FREEZE_RELEASE_MARGIN_C);
+
+  // 2) Sensor arizasi: korlemesine isitmak riskli -> kural olarak ISI ISTEGI KESILIR.
+  //    TEK ISTISNA: son gecerli okuma hala TAZE (<30 dk) ve o okuma donma
+  //    esiginin altindaysa donma korumasi kosar. Tesisatin patlamasi, 30 dk'lik
+  //    bir okumaya guvenmekten agir bir hasardir. Pencere dolunca isi kesilir.
   if (sensor_fault_) {
+    const bool fresh = elapsed(now_ms, last_good_ms_) < FREEZE_STALE_GRACE_MS;
+    if (fresh && freeze_demand) {
+      freeze_latched_ = true;
+      reason_ = HeatReason::FreezeGuard;
+      setHeat(true, now_ms, false);
+      return heat_;
+    }
     reason_ = HeatReason::SensorFault;
-    if (heat_) { heat_ = false; has_switched_ = true; last_switch_ms_ = now_ms; }
+    setHeat(false, now_ms, false);
     return heat_;
   }
 
-  // 3) Donma korumasi: esigin altinda ZORLA isit, bant kadar isinana dek birakma.
-  //    Mandal (latch) salinimi engeller; bu da asgari beklemeyi atlar (emniyet).
+  // 3) Donma korumasi: esigin altinda ZORLA isit, BIRAKMA PAYI kadar isinana dek
+  //    birakma. Pay konfor bandindan DEGIL, sensorun cozunurlugunden gelir
+  //    (FREEZE_RELEASE_MARGIN_C) — bant 6 iken mandalin 18 °C'de birakmasi
+  //    (hedef 5 iken) bosa yakilan gazdi.
   if (last_temp_c_ < settings_.freeze_guard_c) {
     freeze_latched_ = true;
-  } else if (freeze_latched_ && last_temp_c_ >= settings_.freeze_guard_c + settings_.hysteresis_c) {
+  } else if (freeze_latched_ &&
+             last_temp_c_ >= settings_.freeze_guard_c + FREEZE_RELEASE_MARGIN_C) {
     freeze_latched_ = false;
   }
   if (freeze_latched_) {
     reason_ = HeatReason::FreezeGuard;
-    if (!heat_) { heat_ = true; has_switched_ = true; last_switch_ms_ = now_ms; }
+    setHeat(true, now_ms, false);  // emniyet: beklemeyi atlar, saati sifirlamaz
     return heat_;
   }
 
-  // 4) Normal histerezis.
+  // 4) Normal histerezis — YURURLUKTEKI hedefe gore (taban ya da kural).
   const float half = settings_.hysteresis_c * 0.5f;
-  const float on_at = settings_.target_c - half;
-  const float off_at = settings_.target_c + half;
+  const float on_at = effective_target_c_ - half;
+  const float off_at = effective_target_c_ + half;
 
   bool want = heat_;
   HeatReason r = HeatReason::InBand;
@@ -278,17 +405,17 @@ bool Controller::decide(uint32_t now_ms) {
   else if (last_temp_c_ >= off_at) { want = false; r = HeatReason::AboveBand; }
 
   // 5) Asgari bekleme: histerezis degisim istiyor ama role yeni anahtarlandiysa bekle.
-  if (want != heat_ && has_switched_ &&
+  //    TEK ISTISNA: son anahtarlama EMNIYET yolundan geldiyse (ariza kesmesi /
+  //    donma korumasi) donus bekletilmez — yoksa aralikli sensor arizasinda ev
+  //    hic isinmiyor (Y3). Bu izin tek seferliktir; ilk konfor anahtarlamasinda
+  //    duser, yani asgari bekleme normal calismaya devam eder.
+  if (want != heat_ && has_switched_ && !safety_recovery_ &&
       elapsed(now_ms, last_switch_ms_) < (uint32_t)settings_.min_relay_hold_s * 1000u) {
     reason_ = HeatReason::MinHold;
     return heat_;
   }
 
-  if (want != heat_) {
-    heat_ = want;
-    has_switched_ = true;
-    last_switch_ms_ = now_ms;
-  }
+  setHeat(want, now_ms, true);
   reason_ = r;
   return heat_;
 }
@@ -305,8 +432,32 @@ bool Controller::update(uint32_t now_ms, const Reading& r, const Clock& c) {
   const uint32_t age = has_reading_ ? elapsed(now_ms, last_good_ms_) : elapsed(now_ms, begin_ms_);
   sensor_fault_ = age > (uint32_t)settings_.sensor_timeout_s * 1000u;
 
-  applyRules(now_ms, c);
+  applyRules(c);
   return decide(now_ms);
+}
+
+CloudApply applyCloudState(Controller& ctrl, RuleSet& rules, const Settings* new_settings,
+                           const RuleSet* new_rules) {
+  CloudApply out;
+  if (new_settings) {
+    Settings ns = *new_settings;
+    clampSettings(ns);  // buluttan gelen degere GUVENILMEZ; once kirp, SONRA karsilastir
+    if (!settingsEqual(ctrl.settings(), ns)) {
+      ctrl.setSettings(ns);
+      out.settings_changed = true;
+    }
+  }
+  if (new_rules) {
+    RuleSet nr = *new_rules;
+    sanitizeRules(nr);
+    if (!rulesEqual(nr, rules)) {
+      rules = nr;
+      ctrl.setRules(rules);
+      out.rules_changed = true;
+    }
+  }
+  out.needs_persist = out.settings_changed || out.rules_changed;
+  return out;
 }
 
 }  // namespace kombi

@@ -1,0 +1,19 @@
+# Netlify yayın ayarı — YAYIN YAPILMADI, bu dosya hazırlık (ayrı onay gerekir).
+#
+# Yayın kökü `dashboard/`: içinde yalnız statik dosyalar var ve `config.js`
+# `.gitignore`'da olduğu için depoya hiç girmiyor. Netlify'da config.js
+# ortam değişkeninden değil, yayın öncesi elle oluşturulur
+# (bkz. docs/SUPABASE-KURULUM.md §7).
+#
+# Güvenlik başlıkları `dashboard/_headers` dosyasında (CSP, HSTS, çerçeve
+# yasağı). Netlify ikisini de okur; başlıkları tek yerde tutmak için burada
+# tekrar edilmiyor.
+
+[build]
+  publish = "dashboard"
+  command = ""
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

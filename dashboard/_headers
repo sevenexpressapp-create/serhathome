@@ -1,0 +1,19 @@
+# Netlify güvenlik başlıkları (ORTA-1). Bu dosya `dashboard/` yayın köküyle
+# birlikte gider; Netlify onu okuyup her yanıta bu başlıkları ekler.
+#
+# ⚠️ connect-src: proje açılınca `*.supabase.co` yerine TAM proje adresi
+# yazılmalı (`https://<PROJE_REF>.supabase.co`). Joker, panelin yanlışlıkla
+# başka bir Supabase projesine veri göndermesini engellemez.
+#
+# style-src'de 'unsafe-inline' var çünkü panel `el.style.background = ...` ile
+# satır-içi stil ATAMASI yapıyor (grafik renkleri, gün düğmeleri). Script
+# tarafında 'unsafe-inline' YOK: satır-içi `onerror=` kaldırıldı, kütüphane
+# CDN'den değil depodan geliyor.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()
+  Cross-Origin-Opener-Policy: same-origin

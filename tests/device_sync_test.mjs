@@ -67,8 +67,9 @@ await rest("scenario_rules", { method: "POST", body: { device_id: D1, days_mask:
 
 const report = {
   temp_c: 20.4, humidity: 48, relay_on: true, sensor_ok: true, time_valid: false,
-  rules_suspended: true, target_c: 22.5, reason: "below_band", uptime_s: 42,
-  wifi_rssi: -61, fw_version: "kombi-fw 0.1.0-faz1",
+  rules_suspended: true, target_c: 22.5, base_target_c: 22.5, rule_active: false,
+  active_rule_hour: null, active_rule_minute: null, reason: "below_band", uptime_s: 42,
+  wifi_rssi: -61, fw_version: "kombi-fw 0.2.0-faz1",
 };
 
 async function callFn(headers, body = report, method = "POST") {
@@ -147,6 +148,50 @@ check("F4 tum 401 cevaplari AYNI (hangi cihazin var oldugu sizmiyor)",
   check("F8 ayarsiz cihaza varsayilan ayar uretiliyor",
     r.status === 200 && Number(r.data?.settings?.target_c) === 21,
     `durum=${r.status} hedef=${r.data?.settings?.target_c}`);
+}
+
+// 7) Y7 — GECERLI OKUMA YOKKEN NULL. Cihaz artik `temp_c: null` gonderiyor;
+//    fonksiyon bunu 0'a cevirmemeli, yoksa panelde "DONMA RISKI" uretilir.
+{
+  await callFn({ "x-device-id": D1, "x-device-secret": SECRET1 },
+    { ...report, temp_c: null, humidity: null, sensor_ok: false });
+  const r = await rest(`device_state?device_id=eq.${D1}&select=temp_c,humidity,sensor_ok`);
+  const row = r.data?.[0];
+  check("F9 (Y7) temp_c/humidity NULL olarak yaziliyor (0.0'a cevrilmiyor)",
+    row?.temp_c === null && row?.humidity === null && row?.sensor_ok === false,
+    `veri=${JSON.stringify(row)}`);
+}
+// POZITIF KONTROL (ayni eksen): gercek deger gonderilince yine yaziliyor.
+{
+  await callFn({ "x-device-id": D1, "x-device-secret": SECRET1 }, { ...report, temp_c: 19.3 });
+  const r = await rest(`device_state?device_id=eq.${D1}&select=temp_c`);
+  check("F9b POZITIF KONTROL: gercek okuma yazilmaya devam ediyor",
+    Number(r.data?.[0]?.temp_c) === 19.3, `temp_c=${r.data?.[0]?.temp_c}`);
+}
+
+// 8) K1 — yururlukteki hedef / taban hedef / kural kaynagi yaziliyor.
+{
+  await callFn({ "x-device-id": D1, "x-device-secret": SECRET1 },
+    { ...report, target_c: 25, base_target_c: 21, rule_active: true,
+      active_rule_hour: 17, active_rule_minute: 0 });
+  const r = await rest(`device_state?device_id=eq.${D1}&select=target_c,base_target_c,rule_active,active_rule_hour,active_rule_minute`);
+  const row = r.data?.[0];
+  check("F10 (K1) yururlukteki hedef 25 + taban 21 + kural 17:00 yaziliyor",
+    Number(row?.target_c) === 25 && Number(row?.base_target_c) === 21 &&
+    row?.rule_active === true && row?.active_rule_hour === 17,
+    `veri=${JSON.stringify(row)}`);
+}
+
+// 9) Bozuk/aralik disi govde alani: 500 DEGIL, alan NULL olmali
+//    (yeni sutunlarin `check` kisitlari var; kirpma olmazsa fonksiyon 500 verir).
+{
+  const r = await callFn({ "x-device-id": D1, "x-device-secret": SECRET1 },
+    { ...report, active_rule_hour: 99, active_rule_minute: -5, wifi_rssi: "abc", uptime_s: 1e30 });
+  const row = (await rest(`device_state?device_id=eq.${D1}&select=active_rule_hour,active_rule_minute,wifi_rssi,uptime_s`)).data?.[0];
+  check("F11 aralik disi/bozuk alanlar NULL'a cevriliyor, fonksiyon 200 donuyor",
+    r.status === 200 && row?.active_rule_hour === null && row?.active_rule_minute === null &&
+    row?.wifi_rssi === null && row?.uptime_s === null,
+    `durum=${r.status} veri=${JSON.stringify(row)}`);
 }
 
 await rest(`devices?id=in.(${D1},${D2})`, { method: "DELETE" });

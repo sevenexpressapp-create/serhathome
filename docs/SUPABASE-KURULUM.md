@@ -41,6 +41,10 @@ cihaz sırrıyla yapılıyor (fonksiyonun kendi içinde).
 
 1. **Authentication → Users → Add user**: kendi e-postanız + güçlü parola,
    "Auto confirm" açık. Çıkan `user id`'yi kopyalayın.
+   ⚠️ Parola politikası (§7.2) gereği parola **en az 12 karakter** ve
+   büyük/küçük harf + rakam + sembol içermeli; yoksa Supabase 422
+   `weak_password` döner.
+
 2. Cihaz sırrını üretin (terminalde):
 
    ```
@@ -58,9 +62,15 @@ cihaz sırrıyla yapılıyor (fonksiyonun kendi içinde).
 
    ```sql
    insert into public.devices (id, owner_id, name, secret_sha256)
-   values ('kombi-salon', '<USER_ID>', 'Salon kombisi', '<SHA256_OZETI>');
-   insert into public.device_settings (device_id) values ('kombi-salon');
+   values ('<CIHAZ_KIMLIGI>', '<USER_ID>', 'Salon kombisi', '<SHA256_OZETI>');
+   insert into public.device_settings (device_id) values ('<CIHAZ_KIMLIGI>');
    ```
+
+   > **Cihaz kimliği tahmin edilebilir olmasın** (güvenlik denetimi, düşük
+   > öncelik ama ücretsiz): `kombi-salon` yerine örneğin
+   > `kombi-$(openssl rand -hex 4)` kullanın. Kimlik tek başına yetki vermez
+   > (sır gerekli) ve 401 cevapları ayırt edilemez; ama hedefli deneme yapan
+   > birinin işini zorlaştırır. Aynı değer `config.h`'daki `DEVICE_ID` olmalı.
 
 ## 5. Firmware ve panel yapılandırması
 
@@ -100,19 +110,104 @@ Seri portta (115200) şu satırlar görülmeli:
 Sonra panelde: **Table Editor → device_state** satırı dolmalı, `last_seen_at`
 güncellenmeli. Panel tarayıcıdan açıldığında anlık sıcaklık görünmeli.
 
-Bulut tarafının RLS'ini aynı testle sınamak için (yerelde 24/24 geçti):
+Bulut tarafının RLS'ini aynı testle sınamak için (yerelde 34/34 geçti):
 
 ```
 SUPABASE_URL=https://<REF>.supabase.co ANON_KEY=<anon> SERVICE_KEY=<service> \
-DB_URL=<Project Settings > Database > Connection string> node tests/rls_test.mjs
+node tests/rls_test.mjs
 ```
 
-> Bu test iki geçici kullanıcı oluşturur ve mutasyon adımında `devices` tablosunun
-> RLS'ini bir an kapatıp geri açar. **Canlıda kullanmadan önce okuyun**; isterseniz
-> mutasyon bölümünü atlayın (o zaman "alet canlı mı" kanıtı da düşer).
+> ⚠️ **Mutasyon adımını canlıda KOŞMAYIN** (güvenlik denetimi ORTA-5). O adım
+> `alter table ... disable row level security` çalıştırıyor; `finally` geri açıyor
+> ama koşum SIGKILL alırsa ya da makine çökerse **tablo RLS'siz kalır.** Bu yüzden
+> adım artık `KOMBI_MUTATE=1` bayrağı arkasında ve yalnız `127.0.0.1` hedefinde
+> çalışıyor. Yukarıdaki komutta bayrak YOK: bulut koşumunda mutasyon atlanır,
+> testin kalan 28 ölçümü koşar. "Alet canlı mı" kanıtı yerelde alınır
+> (`KOMBI_MUTATE=1 node tests/rls_test.mjs`) — aynı şema, aynı politika dosyası.
 
-## 7. Faz 2'ye bırakılanlar
+Ayrıca bulut projesinde koşulacaklar:
 
-- Netlify yayını (ayrı onay)
+```
+SUPABASE_URL=https://<REF>.supabase.co SERVICE_KEY=<service> node tests/device_sync_test.mjs
+SUPABASE_URL=https://<REF>.supabase.co SERVICE_KEY=<service> node tests/auth_policy_test.mjs
+```
+
+`auth_policy_test.mjs` §7'deki kimlik ayarlarının gerçekten uygulandığını ölçer
+(kayıt kapalı mı, parola politikası tutuyor mu, meşru kullanıcı girebiliyor mu).
+
+## 7. 🔴 KİMLİK GÜVENLİĞİ — Serhat Bey'in panelden yapacakları
+
+Güvenlik denetimi bunu **"internetten kombiye uzanan en gerçekçi tek zincir"**
+diye işaretledi (YÜKSEK-2). Sebep: panel Netlify'da herkese açık olacak ve proje
+adresi + anon anahtar tarayıcıya gidiyor — yani **proje adresi herkese açıktır.**
+Kayıt açık + 6 karakterlik parola + captcha yok = parola püskürtmesi. Hesap ele
+geçerse saldırgan hedefi 30 °C'de tutabilir, kuralları yeniden yazabilir, donma
+korumasını sabote edebilir.
+
+`supabase/config.toml` içindeki ayarlar düzeltildi ve **yerel yığında ölçüldü**
+(`node tests/auth_policy_test.mjs` → 5/5). CLI ile bulut projesine basmak için:
+
+```
+npx supabase link --project-ref <PROJE_REF>
+npx supabase config push          # config.toml'daki auth ayarlarini projeye yazar
+```
+
+`config push` desteklenmiyorsa ya da bir kısmı geçmezse **panelden** yapılacaklar:
+
+### 7.1 Site adresi ve yönlendirme (Authentication → URL Configuration)
+| Alan | Değer |
+|---|---|
+| **Site URL** | `https://<KOMBI-PANEL-ADRESI>.netlify.app` (localhost BIRAKILMAZ) |
+| **Redirect URLs** | aynı adres (ve geliştirme için `http://127.0.0.1:8788`) |
+
+Neden: parola sıfırlama / e-posta doğrulama bağlantıları bu adresi kullanır;
+localhost kalırsa bağlantılar Serhat Bey'in makinesine işaret eder.
+
+### 7.2 Kayıt ve parola (Authentication → Sign In / Providers → Email)
+| Ayar | Değer | Ölçüm |
+|---|---|---|
+| **Allow new users to sign up** | **KAPALI** | anonim kayıt → 422 `signup_disabled` |
+| Minimum password length | **12** | 9 karakterlik parola → 422 `weak_password` |
+| Password requirements | **Lower, upper, digits, symbols** | yalnız küçük harf → 422 |
+| Secure password change | **AÇIK** | parola değiştirmek için yeniden kimlik ister |
+
+> ⚠️ **"Email provider"ı kapatmayın.** `[auth.email] enable_signup = false`
+> yazmak e-posta/parola ile **girişi de** kapatıyor (ölçüldü: 422
+> `email_provider_disabled`, panel hiç açılmıyor). Kayıt kapatmayı yapan tek
+> doğru yer genel `enable_signup` ayarıdır.
+
+### 7.3 Captcha (Authentication → Attack Protection)
+- **Enable Captcha protection** → sağlayıcı: hCaptcha ya da Cloudflare Turnstile
+- Gizli anahtarı panele girin (depoya YAZILMAZ)
+
+Yerelde **bilerek kapalı**: captcha açıkken her giriş bir captcha jetonu ister ve
+kabul testleri (`tests/panel_test.mjs`, `tests/rls_test.mjs`) koşulamaz hale gelir.
+`config.toml` içinde hazır blok yorumda duruyor.
+
+### 7.4 MFA — **panel kullanıcısı için** (Authentication → Multi-Factor)
+Bu, Supabase *hesabınızın* MFA'sı değil; **panelde oturum açan kullanıcının**
+ikinci adımı. Ev ısıtmasını kontrol eden bir hesap için:
+- MFA'yı etkinleştirin (TOTP), ardından panelden giriş yapıp kendi
+  kullanıcınız için bir doğrulayıcı kaydedin.
+- Not: mevcut panel arayüzü MFA adımını **henüz göstermiyor**; MFA zorunlu
+  yapılırsa panel giriş akışına TOTP alanı eklenmelidir (Faz 2 işi, tek ekran).
+  Bu yüzden şimdilik "etkinleştir + kaydet" önerilir, "zorunlu kıl" önerilmez.
+
+### 7.5 Doğrulama (beyan değil ölçüm)
+```
+SUPABASE_URL=https://<REF>.supabase.co ANON_KEY=<anon> SERVICE_KEY=<service> \
+node tests/auth_policy_test.mjs
+```
+Beş ölçümün beşi de geçmeli. S5 ("geçerli kullanıcı giriş yapabiliyor")
+geçmiyorsa 7.2'deki uyarıya dönün: e-posta sağlayıcısı kapanmış olabilir.
+
+## 8. Faz 2'ye bırakılanlar
+
+- Netlify yayını (ayrı onay). Yayın kökü `dashboard/`, güvenlik başlıkları
+  `dashboard/_headers` dosyasında — **`connect-src`'deki `*.supabase.co`
+  jokerini gerçek proje adresiyle değiştirin.**
 - `pg_cron` ile "cihaz sustu / donma riski" kontrolü ve Telegram alarmı
-  (veri kaynağı hazır: `public.device_health` görünümü)
+  (veri kaynağı hazır: `public.device_health` görünümü). ⚠️ `events` tablosunun
+  üreticisi yok — `docs/FAZ2-GUVENLIK-KALEMLERI.md` O2.
+- `pg_cron` ile telemetri budama: `select public.prune_telemetry(30)`
+- Kalan güvenlik kalemleri: `docs/FAZ2-GUVENLIK-KALEMLERI.md`

@@ -41,8 +41,23 @@ kaydına OFF yaz → `pinMode(OUTPUT)`. Ölçüm: her açılışta seri porta
 **Kalan açık:** reset ile kodumuzun arasındaki ~200 ms'de pini tutan tek şey röle
 modülünün kendi giriş katmanıdır. Ölçüm bu pencerede hattın HIGH olduğunu
 gösteriyor, ama garanti eden bir harici direnç yok.
-**Öneri (💰 çok ucuz, Faz 3/4'te):** GPIO 23 ile 3V3 arasına **10 kΩ pull-up**
-direnci. Kombi bağlandıktan sonra bu pencere gerçek bir risktir.
+
+### 🔴 HARİCİ 10 kΩ PULL-UP — FAZ 3'ÜN BLOKAJLI ÖN KOŞULU
+
+Bu artık "öneri" değil **ön koşul** (kod denetimi O1). GPIO 23 ile 3V3 arasına
+**10 kΩ** direnç takılmadan kombi klemenslerine bağlantı YAPILMAZ.
+
+- **Neden:** kombi bağlandıktan sonra o ~200 ms'lik pencerede röle çekerse kombi
+  istemsiz yanar. Elektrik kesintisi sonrası her açılışta tekrarlanan bir risktir.
+- **Ölçümün kapsamadığı yer (dürüst sınır):** `docs/FAZ1-TEST-SONUCLARI.md`
+  H1a satırı yalnız **kodumuz çalıştıktan sonrasını** ölçer
+  (`boot_pad_level`, seri porta basılan ilk satır). Reset ile kodun arasındaki
+  ilk milisaniyeleri ölçen bir aletimiz **yok**; o pencere için kanıtımız
+  `tools/pin_scan` ölçümüdür (pulldown açıkken hat HIGH okudu = modülün giriş
+  katmanı hattı yukarı çekiyor), ki bu **dolaylı** bir kanıttır.
+- **Kabul ölçümü (Faz 3'te):** direnç takıldıktan sonra kart ENERJİSİZ iken
+  GPIO 23 – 3V3 arası direnç ~10 kΩ okunmalı, ve röle çekiliyken reset atıldığında
+  `pad=HIGH` satırı yine görülmeli.
 
 ## TLS kök sertifikası
 

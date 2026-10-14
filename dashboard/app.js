@@ -18,6 +18,13 @@ let device = null;
 let settings = null;
 let pendingTarget = null;
 let pollTimer = null;
+// ORTA-4 — HESAPLAR ARASI SIZINTININ YARIS HALI. Oturum degisince ekran
+// sifirlaniyor (D10) ama UCUSTAKI yanitlar geri donup yeni hesabin ekranina
+// yaziliyordu: A cikar -> B girer -> A'nin 4 istegi doner -> A'nin sicakligi
+// B'nin ekraninda. Iki onlem: (1) oturum cagi sayaci, geciken yanit atilir,
+// (2) AbortController ile istekler gercekten iptal edilir.
+let sessionEpoch = 0;
+let inflight = null;
 
 // --- tema (yalniz goruntu tercihi; basarisiz olursa sessizce gecilir) --------
 try {
@@ -47,6 +54,8 @@ if (!CFG.SUPABASE_URL || !CFG.SUPABASE_ANON_KEY) {
 
 function onSession(session) {
   const signedIn = Boolean(session);
+  const epoch = ++sessionEpoch;           // ORTA-4: bu andan onceki yanitlar gecersiz
+  if (inflight) { inflight.abort(); inflight = null; }
   show($("auth-card"), !signedIn);
   show($("app"), signedIn);
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -56,7 +65,8 @@ function onSession(session) {
   // (D10) tam olarak bu yakalandi.
   resetView();
   if (signedIn) {
-    loadDevice().then(() => {
+    loadDevice(epoch).then(() => {
+      if (epoch !== sessionEpoch) return;
       refresh();
       pollTimer = setInterval(refresh, POLL_MS);
       $("poll-note").textContent = `${POLL_MS / 1000} sn'de bir yenilenir`;
@@ -76,15 +86,31 @@ $("auth-form").addEventListener("submit", async (ev) => {
 $("signout").addEventListener("click", () => sb.auth.signOut());
 
 // --- veri -------------------------------------------------------------------
-async function loadDevice() {
+async function loadDevice(epoch) {
   const { data, error } = await sb.from("devices").select("id, name").order("created_at").limit(1);
-  if (error || !data || data.length === 0) {
-    $("device-name").textContent = error ? "cihaz okunamadi" : "kayitli cihaz yok";
+  if (epoch !== sessionEpoch) return;  // ORTA-4: oturum degisti, yaniti AT
+  if (error) {
+    $("device-name").textContent = "cihaz okunamadi";
+    showLoadError("Cihaz listesi okunamadi: " + error.message);
+    device = null;
+    return;
+  }
+  if (!data || data.length === 0) {
+    $("device-name").textContent = "kayitli cihaz yok";
     device = null;
     return;
   }
   device = data[0];
   $("device-name").textContent = device.name || device.id;
+}
+
+// Y6 — HATAYI BOS DURUMDAN AYIR. Eskiden dort sorgunun `.error` alani hic
+// okunmuyordu: ag/RLS/oturum hatasi ekranda "Cihaz henuz hic baglanmadi"
+// bos durumu gibi gorunuyor, kullanici yanlis teshis koyuyordu.
+function showLoadError(msg) {
+  const el = $("load-err");
+  el.textContent = "Veri okunamadi — gosterilen bilgi guncel OLMAYABILIR. " + msg;
+  show(el, true);
 }
 
 let lastRows = [];
@@ -96,6 +122,8 @@ function resetView() {
   lastRows = [];
   $("device-name").textContent = "—";
   $("target-val").textContent = "—";
+  $("target-src").textContent = "—";
+  show($("load-err"), false);
   for (const id of ["s-band", "s-freeze", "s-hold"]) $(id).value = "";
   $("s-manual").value = "false";
   renderState(null);
@@ -109,27 +137,57 @@ function resetView() {
 
 async function refresh() {
   if (!device) return;
+  const epoch = sessionEpoch;
   const sinceIso = new Date(Date.now() - HISTORY_HOURS * 3600e3).toISOString();
-  const [stateRes, setRes, ruleRes, telRes] = await Promise.all([
-    sb.from("device_state").select("*").eq("device_id", device.id).maybeSingle(),
-    sb.from("device_settings").select("*").eq("device_id", device.id).maybeSingle(),
-    sb.from("scenario_rules").select("*").eq("device_id", device.id).order("hour").order("minute"),
-    sb.from("telemetry").select("ts, temp_c, humidity, relay_on")
-      .eq("device_id", device.id).gte("ts", sinceIso).order("ts"),
-  ]);
+  if (inflight) inflight.abort();
+  const ac = new AbortController();
+  inflight = ac;
 
-  settings = setRes.data || null;
-  renderState(stateRes.data || null);
+  let res;
+  try {
+    res = await Promise.all([
+      sb.from("device_state").select("*").eq("device_id", device.id).abortSignal(ac.signal).maybeSingle(),
+      sb.from("device_settings").select("*").eq("device_id", device.id).abortSignal(ac.signal).maybeSingle(),
+      sb.from("scenario_rules").select("*").eq("device_id", device.id).order("hour").order("minute")
+        .abortSignal(ac.signal),
+      sb.from("telemetry").select("ts, temp_c, humidity, relay_on")
+        .eq("device_id", device.id).gte("ts", sinceIso).order("ts").abortSignal(ac.signal),
+    ]);
+  } catch (e) {
+    // Promise.all REDDI de yakalanmali (eskiden yakalanmiyordu).
+    if (epoch === sessionEpoch && e?.name !== "AbortError") showLoadError(String(e?.message || e));
+    return;
+  } finally {
+    if (inflight === ac) inflight = null;
+  }
+  if (epoch !== sessionEpoch) return;  // ORTA-4: oturum degisti, yaniti AT
+
+  const [stateRes, setRes, ruleRes, telRes] = res;
+  // Y6: HER sorgunun hatasi okunur. Iptal (AbortError) hata sayilmaz.
+  const errs = [
+    ["anlik durum", stateRes.error], ["ayarlar", setRes.error],
+    ["kurallar", ruleRes.error], ["gecmis", telRes.error],
+  ].filter(([, e]) => e && e.name !== "AbortError" && e.code !== "20");
+  if (errs.length) {
+    showLoadError(errs.map(([ad, e]) => `${ad}: ${e.message || e.code}`).join(" · "));
+  } else {
+    show($("load-err"), false);
+  }
+
+  settings = setRes.error ? null : (setRes.data || null);
+  if (!stateRes.error) renderState(stateRes.data || null);
   renderSettings(settings);
-  renderRules(ruleRes.data || []);
-  lastRows = (telRes.data || []).map((r) => ({
-    t: new Date(r.ts).getTime(),
-    temp: r.temp_c === null ? null : Number(r.temp_c),
-    hum: r.humidity === null ? null : Number(r.humidity),
-    heat: Boolean(r.relay_on),
-  }));
-  renderChart(lastRows, settings);
-  renderTable(lastRows);
+  if (!ruleRes.error) renderRules(ruleRes.data || []);
+  if (!telRes.error) {
+    lastRows = (telRes.data || []).map((r) => ({
+      t: new Date(r.ts).getTime(),
+      temp: r.temp_c === null ? null : Number(r.temp_c),
+      hum: r.humidity === null ? null : Number(r.humidity),
+      heat: Boolean(r.relay_on),
+    }));
+    renderChart(lastRows, settings);
+    renderTable(lastRows);
+  }
 }
 
 function renderState(st) {
@@ -138,6 +196,7 @@ function renderState(st) {
     $("temp").textContent = "—";
     $("hum").textContent = "—";
     $("target-now").textContent = "—";
+    $("target-src").textContent = "—";
     $("online").textContent = "veri yok";
     $("reason").textContent = "—";
     $("relay-text").textContent = "bilinmiyor";
@@ -149,6 +208,9 @@ function renderState(st) {
   $("temp").textContent = st.temp_c === null ? "—" : Number(st.temp_c).toFixed(1);
   $("hum").textContent = st.humidity === null ? "—" : Number(st.humidity).toFixed(0) + " %";
   $("target-now").textContent = st.target_c === null ? "—" : Number(st.target_c).toFixed(1) + " °C";
+  // K1 — "su an neden 25 °C?" Yururlukteki hedefin KAYNAGI yaziliyor: saatli
+  // kural mi, elle yazilan taban mi. (Kural artik tabani ezmiyor; ikisi ayri.)
+  $("target-src").textContent = targetSourceLabel(st);
   $("online").textContent = online ? "cevrimici" : "SUSTU";
   $("reason").textContent = reasonLabel(st.reason);
   const on = Boolean(st.relay_on);
@@ -163,6 +225,20 @@ function renderState(st) {
   if (st.rules_suspended) problems.push("Cihazin saati dogrulanmadi: saatli senaryolar askida, termostat son hedefle suruyor.");
   $("alerts").innerHTML = problems.map((p) => "• " + p).join("<br>");
   show($("alerts"), problems.length > 0);
+}
+
+function targetSourceLabel(st) {
+  if (st.target_c === null) return "—";
+  const base = st.base_target_c === null || st.base_target_c === undefined
+    ? null : Number(st.base_target_c);
+  if (st.rule_active) {
+    const hh = String(st.active_rule_hour ?? 0).padStart(2, "0");
+    const mm = String(st.active_rule_minute ?? 0).padStart(2, "0");
+    return `${hh}:${mm} senaryosu` + (base === null ? "" : ` (taban ${base.toFixed(1)} °C)`);
+  }
+  if (st.rules_suspended) return "saat dogrulanmadi, taban hedef";
+  if (st.rule_active === false && base !== null && Number(st.target_c) === base) return "elle ayarlanan hedef";
+  return base === null ? "—" : `taban ${base.toFixed(1)} °C`;
 }
 
 function reasonLabel(r) {
@@ -331,7 +407,7 @@ function renderChart(rows, s) {
   svg.innerHTML = '<title id="chart-title">Oda sicakligi, son ' + HISTORY_HOURS + " saat</title>";
   const pts = rows.filter((r) => r.temp !== null);
   show($("chart-empty"), pts.length < 2);
-  if (pts.length < 2) { svg.style.height = "0px"; return; }
+  if (pts.length < 2) { svg.style.height = "0px"; chartCtx = null; return; }
   svg.style.height = "240px";
 
   const w = svg.clientWidth || 360;
@@ -414,32 +490,51 @@ function renderChart(rows, s) {
   svg.appendChild(el("circle", { cx: X(last.t), cy: Y(last.temp), r: 4, fill: "var(--series-1)", stroke: "var(--surface)", "stroke-width": 2 }));
 
   // --- gezinme katmani: dikey nisan + ipucu -------------------------------
+  // Y5 — DINLEYICI BIRIKMESI. Eskiden her cizimde 5 dinleyici EKLENIYOR ama
+  // hic kaldirilmiyordu (`svg.innerHTML=` yalniz dugumleri siler, dinleyiciler
+  // SVG elemaninin kendisindeydi). 15 sn'lik yoklamayla saatte ~1.200 dinleyici;
+  // telefonda acik kalan panel saatler icinde bozuluyordu.
+  // Cozum: dinleyiciler MODUL YUKLENIRKEN TEK KEZ baglanir, cizim yalniz
+  // paylasilan `chartCtx`i gunceller.
   const cross = el("line", { y1: m.t, y2: m.t + plotH, stroke: "var(--axis)", "stroke-width": 1, opacity: 0 });
   svg.appendChild(cross);
+  chartCtx = { svg, cross, pts, m, plotW, x0, x1, X, Y };
+}
+
+// Grafigin gezinme durumu: tek dinleyici kumesi bunu okur.
+let chartCtx = null;
+
+(function bindChartPointerOnce() {
+  const svg = $("chart");
   const tip = $("tip");
   const move = (ev) => {
-    const box = svg.getBoundingClientRect();
+    const c = chartCtx;
+    if (!c || !c.pts.length) return;
+    const box = c.svg.getBoundingClientRect();
     const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - box.left;
-    const t = x0 + ((px - m.l) / plotW) * (x1 - x0);
-    let best = pts[0];
-    for (const p of pts) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
-    cross.setAttribute("x1", X(best.t));
-    cross.setAttribute("x2", X(best.t));
-    cross.setAttribute("opacity", 1);
+    const t = c.x0 + ((px - c.m.l) / c.plotW) * (c.x1 - c.x0);
+    let best = c.pts[0];
+    for (const p of c.pts) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+    c.cross.setAttribute("x1", c.X(best.t));
+    c.cross.setAttribute("x2", c.X(best.t));
+    c.cross.setAttribute("opacity", 1);
     tip.style.opacity = 1;
     tip.textContent =
       new Date(best.t).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }) +
       " · " + best.temp.toFixed(1) + " °C · isitma " + (best.heat ? "acik" : "kapali");
     const tw = tip.offsetWidth || 150;
-    tip.style.left = Math.max(0, Math.min(box.width - tw, X(best.t) - tw / 2)) + "px";
-    tip.style.top = Math.max(0, Y(best.temp) - 36) + "px";
+    tip.style.left = Math.max(0, Math.min(box.width - tw, c.X(best.t) - tw / 2)) + "px";
+    tip.style.top = Math.max(0, c.Y(best.temp) - 36) + "px";
+  };
+  const hide = () => {
+    if (chartCtx) chartCtx.cross.setAttribute("opacity", 0);
+    tip.style.opacity = 0;
   };
   svg.addEventListener("mousemove", move);
   svg.addEventListener("touchstart", move, { passive: true });
   svg.addEventListener("touchmove", move, { passive: true });
-  const hide = () => { cross.setAttribute("opacity", 0); tip.style.opacity = 0; };
   svg.addEventListener("mouseleave", hide);
   svg.addEventListener("touchend", hide);
-}
+})();
 
 window.addEventListener("resize", () => { if (device) renderChart(lastRows, settings); });

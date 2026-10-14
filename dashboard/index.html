@@ -164,12 +164,15 @@
       </div>
       <div class="tiles">
         <div class="tile"><div class="k">Nem</div><div class="v" id="hum">—</div></div>
-        <div class="tile"><div class="k">Cihazdaki hedef</div><div class="v" id="target-now">—</div></div>
+        <div class="tile"><div class="k">Cihazdaki hedef</div><div class="v" id="target-now">—</div>
+          <div class="k" id="target-src">—</div></div>
         <div class="tile"><div class="k">Cihaz</div><div class="v" id="online">—</div></div>
         <div class="tile"><div class="k">Karar</div><div class="v" id="reason">—</div></div>
       </div>
       <div class="note" id="seen">—</div>
       <div class="err hidden" id="alerts"></div>
+      <!-- Y6: veri OKUNAMADI durumu, "henuz veri yok" bos durumundan AYRI. -->
+      <div class="err hidden" id="load-err"></div>
     </section>
 
     <section class="card">
@@ -228,14 +231,16 @@
       <details>
         <summary>Ileri ayarlar</summary>
         <div class="grid2" style="margin-top:12px">
-          <div><label for="s-band">Salinim bandi °C</label><input id="s-band" type="number" min="0.5" max="6" step="0.5"></div>
+          <div><label for="s-band">Salinim bandi °C</label><input id="s-band" type="number" min="2" max="6" step="0.5"></div>
           <div><label for="s-freeze">Donma esigi °C</label><input id="s-freeze" type="number" min="4" max="12" step="0.5"></div>
           <div><label for="s-hold">Role asgari bekleme (sn)</label><input id="s-hold" type="number" min="0" max="1800" step="30"></div>
           <div><label for="s-manual">Manuel mod (senaryolari durdur)</label>
             <select id="s-manual"><option value="false">Kapali</option><option value="true">Acik</option></select></div>
         </div>
         <div class="row" style="margin-top:12px"><button class="primary" id="s-save" type="button">Ileri ayarlari kaydet</button></div>
-        <p class="note">Bant DHT11 sensorunun 1 °C cozunurlugune gore 3 °C secildi; sensor degisince daraltilabilir.</p>
+        <p class="note">Bant DHT11 sensorunun 1 °C cozunurlugune gore 3 °C secildi; alt sinir 2 °C
+        (daha dari bu sensorle olculemez, role salinir). Sensor degisince daraltilabilir.
+        Donma esigi hedefin en az 0,5 °C altinda olmak zorunda.</p>
         <div class="err hidden" id="s-err"></div>
       </details>
     </section>
@@ -253,8 +258,12 @@
   </section>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-<script src="config.js" onerror="document.getElementById('config-missing').classList.remove('hidden')"></script>
+<!-- ORTA-1: kutuphane CDN'den DEGIL depodan yukleniyor (SRI'siz ucuncu taraf
+     betigi yok, CSP 'self' ile dar kalabiliyor, panel cevrimdisi de acilir).
+     Surum: @supabase/supabase-js 2.45.4 UMD — vendor/README.md'de kaynagi ve
+     SHA-256 ozeti yazili. -->
+<script src="vendor/supabase-js-2.45.4.umd.js"></script>
+<script src="config.js" id="cfg-script"></script>
 <script src="app.js"></script>
 </body>
 </html>

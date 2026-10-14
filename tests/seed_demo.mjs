@@ -24,14 +24,17 @@ const post = (t, b, merge) => fetch(`${st.API_URL}/rest/v1/${t}`, {
 });
 
 // 1) Verisi olan hesap
-const uid = await user("panel@kombi.test", "Kombi-Panel-2026");
+const uid = await user("panel@kombi.test", "Kombi-Panel-2026!");
 const D = "kombi-salon";
 await post("devices", { id: D, owner_id: uid, name: "Salon kombisi", secret_sha256: createHash("sha256").update("panel-test-sir").digest("hex") }, true);
 await post("device_settings", { device_id: D, target_c: 21.5, hysteresis_c: 3.0 }, true);
+// Kural DEVREDE olan bir durum: yururlukteki hedef 25 (07:00 senaryosu),
+// taban 21.5. Panel "su an neden 25?" sorusunu cevaplayabilmeli (K1).
 await post("device_state", {
   device_id: D, temp_c: 20.4, humidity: 54, relay_on: true, sensor_ok: true, time_valid: true,
-  rules_suspended: false, target_c: 21.5, reason: "below_band", uptime_s: 3600, wifi_rssi: -58,
-  fw_version: "kombi-fw 0.1.0-faz1", last_seen_at: new Date().toISOString(),
+  rules_suspended: false, target_c: 25.0, base_target_c: 21.5, rule_active: true,
+  active_rule_hour: 7, active_rule_minute: 0, reason: "below_band", uptime_s: 3600,
+  wifi_rssi: -58, fw_version: "kombi-fw 0.2.0-faz1", last_seen_at: new Date().toISOString(),
 }, true);
 await post("scenario_rules", { device_id: D, days_mask: 62, hour: 7, minute: 0, target_c: 22 });
 await post("scenario_rules", { device_id: D, days_mask: 127, hour: 23, minute: 0, target_c: 18 });
@@ -41,12 +44,14 @@ let temp = 19.5, heat = true;
 const now = Date.now();
 for (let i = 288; i >= 0; i--) {
   if (heat) { temp += 0.11; if (temp >= 23.0) heat = false; } else { temp -= 0.07; if (temp <= 20.0) heat = true; }
-  rows.push({ device_id: D, ts: new Date(now - i * 5 * 60e3).toISOString(), temp_c: Math.round(temp * 10) / 10, humidity: 52 + (i % 7), relay_on: heat, target_c: 21.5 });
+  rows.push({ device_id: D, ts: new Date(now - i * 5 * 60e3).toISOString(), temp_c: Math.round(temp * 10) / 10, humidity: 52 + (i % 7), relay_on: heat, target_c: 25.0 });
 }
 await post("telemetry", rows);
 
 // 2) BOS hesap — "veri yokken uydurma deger gosterilmiyor" testi icin
-const uid2 = await user("bos@kombi.test", "Kombi-Bos-2026");
+const uid2 = await user("bos@kombi.test", "Kombi-Bos-2026!x");
 await post("devices", { id: "kombi-bos", owner_id: uid2, name: "Yeni kombi", secret_sha256: createHash("sha256").update("bos").digest("hex") }, true);
 
 console.log("tohum veri hazir: panel@kombi.test (dolu) + bos@kombi.test (bos)");
+console.log("NOT: parolalar auth politikasina gore (>=12 krk + karmasiklik) guncellendi;");
+console.log("     tests/panel_test.mjs ayni degerleri kullanir.");

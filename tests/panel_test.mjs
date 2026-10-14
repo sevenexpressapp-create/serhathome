@@ -5,7 +5,7 @@
 const PORT = Number(process.env.CDP_PORT || 9444);
 const BASE = process.env.PANEL_URL || "http://127.0.0.1:8788/index.html";
 const EMAIL = "panel@kombi.test";
-const PASSWORD = "Kombi-Panel-2026";
+const PASSWORD = "Kombi-Panel-2026!";
 const SHOT_DIR = process.env.SHOT_DIR || ".";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -16,7 +16,11 @@ async function targets() {
 }
 
 class CDP {
-  constructor(ws) { this.ws = ws; this.id = 0; this.waiters = new Map(); this.events = []; }
+  constructor(ws) {
+    this.ws = ws; this.id = 0; this.waiters = new Map(); this.events = [];
+    this.handlers = new Map();  // method -> fn(params)
+  }
+  on(method, fn) { if (fn) this.handlers.set(method, fn); else this.handlers.delete(method); }
   static async connect(url) {
     const ws = new WebSocket(url);
     await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
@@ -27,7 +31,11 @@ class CDP {
         const { res, rej } = c.waiters.get(msg.id);
         c.waiters.delete(msg.id);
         msg.error ? rej(new Error(JSON.stringify(msg.error))) : res(msg.result);
-      } else if (msg.method) c.events.push(msg);
+      } else if (msg.method) {
+        c.events.push(msg);
+        const h = c.handlers.get(msg.method);
+        if (h) h(msg.params);
+      }
     };
     return c;
   }
@@ -68,6 +76,12 @@ const page = list.find((t) => t.type === "page");
 const cdp = await CDP.connect(page.webSocketDebuggerUrl);
 await cdp.send("Runtime.enable");
 await cdp.send("Log.enable");
+// ⚠️ `Log.enable` ONCEKI kosumlarda biriken girdileri de GERI OYNATIYOR (ayni
+// tarayici ornegi yeniden kullanilinca). Ilk kosumda bu yuzden D11, bir onceki
+// kosumda BILEREK uretilmis 4 ag hatasini "beklenmeyen hata" sandi — yani
+// olculen sey bu kosum degildi. Kayit burada sifirlanir.
+await cdp.send("Log.clear");
+cdp.events.length = 0;
 await cdp.send("Page.enable");
 // Onbellek KAPALI: olcumun kaynak dosyalarin GUNCEL surumune bakmasi sart.
 // (Bir kosumda Chrome eski index.html'i servis etti ve giris 400 aldi; sayilar
@@ -129,6 +143,18 @@ await sleep(4000);
   const o = JSON.parse(v);
   check("D2 giris calisiyor ve canli degerler geliyor",
     o.panelGorunur && o.temp === "20.4" && o.cevrim === "cevrimici" && o.role === "Isitma acik" && o.cihaz === "Salon kombisi", v);
+}
+
+// --- 2b) K1: "SU AN NEDEN 25 °C?" panelde cevaplaniyor mu ------------------
+{
+  const v = await cdp.eval(`JSON.stringify({
+    hedef: document.getElementById('target-now').textContent,
+    kaynak: document.getElementById('target-src').textContent,
+    hedefKontrol: document.getElementById('target-val').textContent
+  })`);
+  const o = JSON.parse(v);
+  check("D12 (K1) yururlukteki hedef 25 ve KAYNAGI panelde yaziyor (07:00 senaryosu, taban 21,5)",
+    o.hedef === "25.0 °C" && /07:00 senaryosu/.test(o.kaynak) && /21\.5/.test(o.kaynak), v);
 }
 
 // --- 3) Grafik gercekten CIZILDI mi (cizgi + isitma seridi + hedef) ---------
@@ -229,6 +255,128 @@ await sleep(4000);
   check("D9 oturum kalici: yenilemede giris istemiyor", o.panelGorunur && o.authGizli && o.temp !== "—", v);
 }
 
+// --- 8b) Y5: GRAFIK DINLEYICILERI BIRIKMIYOR ------------------------------
+// Eksen: grafigin SVG elemanina EKLENEN dinleyici sayisi. Eskiden her cizimde
+// 5 dinleyici ekleniyor, hic kaldirilmiyordu (15 sn yoklama -> saatte ~1.200).
+{
+  const v = await cdp.eval(`(() => {
+    const svg = document.getElementById('chart');
+    let eklenen = 0;
+    const asil = svg.addEventListener.bind(svg);
+    svg.addEventListener = (...a) => { eklenen++; return asil(...a); };
+    // POZITIF KONTROL: sayacin GERCEKTEN saydigini olc (alet canli mi?).
+    svg.addEventListener('mousemove', () => {});
+    const sayacCalisiyor = eklenen === 1;
+    eklenen = 0;
+    // 10 kez yeniden ciz (panelin 2,5 dakikalik yoklamasina esdeger).
+    for (let i = 0; i < 10; i++) renderChart(lastRows, settings);
+    const sonuc = { sayacCalisiyor, onCizimdeEklenen: eklenen,
+                    cizgiVar: !!svg.querySelector('path') };
+    svg.addEventListener = asil;
+    return JSON.stringify(sonuc);
+  })()`);
+  const o = JSON.parse(v);
+  check("D13 (Y5) 10 yeniden cizimde SVG'ye 0 yeni dinleyici eklendi (sayac canli)",
+    o.sayacCalisiyor === true && o.onCizimdeEklenen === 0 && o.cizgiVar, v);
+}
+
+// Buradan sonraki asamalar BILEREK ag hatasi/duraklatma uretiyor; D11 (konsol
+// temizligi) bu kesme noktasindan oncesini "organik" sayar, sonrasinda ise
+// yalniz ENJEKTE ettigimiz basarisizliklari mazur gorur.
+const enjeksiyonBasi = cdp.events.length;
+
+// --- 8c) Y6: VERI OKUNAMADI durumu BOS DURUMDAN ayri gosteriliyor ---------
+// Eskiden dort sorgunun `.error` alani hic okunmuyordu: RLS/ag/oturum hatasi
+// ekranda "Cihaz henuz hic baglanmadi" bos durumu gibi gorunuyordu.
+//
+// Hata GERCEK AG SEVIYESINDE uretiliyor (CDP `Fetch.failRequest`). Sayfadaki
+// `window.fetch`i degistirmek ISE YARAMIYOR: supabase-js istemciyi kurarken
+// `fetch` referansini bir kez yakaliyor — ilk kosumda bu yuzden "kesilen=0"
+// cikti ve olcum hicbir sey olcmedi (olu alet, yakalandi).
+{
+  await cdp.send("Fetch.enable", {
+    patterns: [{ urlPattern: "*/rest/v1/*", requestStage: "Request" }],
+  });
+  let kesilen = 0;
+  cdp.on("Fetch.requestPaused", (p) => {
+    kesilen++;
+    cdp.send("Fetch.failRequest", { requestId: p.requestId, errorReason: "Failed" }).catch(() => {});
+  });
+  await cdp.eval(`refresh()`);
+  await sleep(1500);
+  cdp.on("Fetch.requestPaused", null);
+  await cdp.send("Fetch.disable");
+
+  const v = await cdp.eval(`JSON.stringify({
+    hataGorunur: !document.getElementById('load-err').classList.contains('hidden'),
+    hataMetni: document.getElementById('load-err').textContent.slice(0, 100),
+    sicaklikKorundu: document.getElementById('temp').textContent,
+    bosDurumMetniYok: !document.getElementById('seen').textContent.includes('henuz hic baglanmadi')
+  })`);
+  const o = JSON.parse(v);
+  check("D14 (Y6) sorgu hatasi KULLANICIYA gosteriliyor ve bos durumla karistirilmiyor",
+    kesilen > 0 && o.hataGorunur && /okunamadi/i.test(o.hataMetni) && o.bosDurumMetniYok,
+    `kesilen=${kesilen} ${v}`);
+}
+// Hata gecince uyari KALKIYOR (yapiskan hata mesaji yok) — ayni eksen, hata yok.
+{
+  await cdp.eval(`refresh()`);
+  await sleep(2000);
+  const v = await cdp.eval(`JSON.stringify({
+    hataGizli: document.getElementById('load-err').classList.contains('hidden'),
+    temp: document.getElementById('temp').textContent
+  })`);
+  const o = JSON.parse(v);
+  check("D15 (Y6) sorgu duzelince hata uyarisi kalkiyor", o.hataGizli && o.temp === "20.4", v);
+}
+
+// --- 8d) ORTA-4: HESAPLAR ARASI YARIS HALI --------------------------------
+// Senaryo: A'nin `device_state` istegi UCUSTA iken A cikar, B girer. A'nin
+// geciken yaniti B'nin ekranina YAZILMAMALI. (D10 duzeltmesi ekrani
+// sifirliyordu ama ucustaki yanitlari gecersizlestirmiyordu.)
+// Istek CDP ile GERCEKTEN duraklatiliyor; oturum degistikten SONRA salinir.
+{
+  await cdp.send("Fetch.enable", {
+    patterns: [{ urlPattern: "*/rest/v1/device_state*", requestStage: "Request" }],
+  });
+  const duraklayan = [];
+  cdp.on("Fetch.requestPaused", (p) => duraklayan.push(p.requestId));
+
+  cdp.eval(`refresh()`).catch(() => {});   // BEKLEMEDEN: istek ucusta kalsin
+  await sleep(800);
+  const duraklayanSayi = duraklayan.length;
+
+  await cdp.eval(`(() => { document.getElementById('signout').click(); return true; })()`);
+  await sleep(1500);
+  await cdp.eval(`(() => {
+    document.getElementById('email').value = 'bos@kombi.test';
+    document.getElementById('password').value = 'Kombi-Bos-2026!x';
+    document.getElementById('auth-form').requestSubmit(); return true;
+  })()`);
+  await sleep(4000);
+
+  // A'nin duraklatilmis istegini SIMDI sal: cevap B'nin oturumunda doner.
+  let salinan = 0, iptalEdilmis = 0;
+  for (const id of duraklayan) {
+    try { await cdp.send("Fetch.continueRequest", { requestId: id }); salinan++; }
+    catch { iptalEdilmis++; }  // istek tarayici tarafindan IPTAL edilmis (AbortController)
+  }
+  await sleep(2500);
+  cdp.on("Fetch.requestPaused", null);
+  await cdp.send("Fetch.disable");
+
+  const v = await cdp.eval(`JSON.stringify({
+    cihaz: document.getElementById('device-name').textContent,
+    temp: document.getElementById('temp').textContent,
+    hedef: document.getElementById('target-now').textContent,
+    kaynak: document.getElementById('target-src').textContent
+  })`);
+  const o = JSON.parse(v);
+  check("D16 (ORTA-4) ucustaki istek oturum degisince ekrana YAZILMIYOR (A'nin 20.4'u B'de yok)",
+    duraklayanSayi > 0 && o.temp === "—" && o.hedef === "—" && o.cihaz !== "Salon kombisi",
+    `duraklatilan=${duraklayanSayi} salinan=${salinan} iptal_edilmis=${iptalEdilmis} ${v}`);
+}
+
 // --- 8) BOS DURUM — gercek bir "verisi olmayan" kullaniciyla -------------
 // Onceki surumde bu testi sayfadaki cizim fonksiyonlarini elle cagirarak
 // kurmustum; o zaman hedef denetimi onceki kullanicinin degerini tutmaya
@@ -238,7 +386,7 @@ await cdp.eval(`(() => { document.getElementById('signout').click(); return true
 await sleep(2000);
 await cdp.eval(`(() => {
   document.getElementById('email').value = 'bos@kombi.test';
-  document.getElementById('password').value = 'Kombi-Bos-2026';
+  document.getElementById('password').value = 'Kombi-Bos-2026!x';
   document.getElementById('auth-form').requestSubmit(); return true;
 })()`);
 await sleep(4500);
@@ -263,19 +411,29 @@ await sleep(4500);
   await shot("panel-3-bos-durum");
 }
 
-// --- 9) Konsol temizligi (URL'leriyle; beklenen 409 ayrilir) --------------
+// --- 9) Konsol temizligi (URL'leriyle; BILEREK uretilen hatalar ayrilir) ---
 {
   const raw = cdp.events
-    .filter((e) => e.method === "Log.entryAdded" || e.method === "Runtime.exceptionThrown")
-    .map((e) => e.method === "Runtime.exceptionThrown"
-      ? { text: "EXC " + (e.params.exceptionDetails.exception?.description ?? "").slice(0, 160), url: "" }
-      : { text: e.params.entry.text.slice(0, 160), url: e.params.entry.url ?? "" });
-  for (const r of raw) console.log("   konsol:", r.text, "<-", r.url);
-  // D8'de BILEREK cakisan kural ekledik: 409 beklenen cevaptir, hata degil.
-  const beklenen = (r) => /favicon/i.test(r.url) || (/409/.test(r.text) && /scenario_rules/.test(r.url));
+    .map((e, i) => ({ e, i }))
+    .filter(({ e }) => e.method === "Log.entryAdded" || e.method === "Runtime.exceptionThrown")
+    .map(({ e, i }) => e.method === "Runtime.exceptionThrown"
+      ? { i, text: "EXC " + (e.params.exceptionDetails.exception?.description ?? "").slice(0, 160), url: "" }
+      : { i, text: e.params.entry.text.slice(0, 160), url: e.params.entry.url ?? "" });
+  for (const r of raw) console.log(`   konsol[${r.i}]:`, r.text, "<-", r.url);
+  console.log(`   (enjeksiyon kesme noktasi: olay indeksi ${enjeksiyonBasi})`);
+  // Beklenenler:
+  //  · favicon (sunucuda yok)
+  //  · D8'de BILEREK eklenen cakisan kural -> 409
+  //  · D14/D16'da BILEREK kesilen/duraklatilan REST istekleri (enjeksiyon
+  //    noktasindan SONRA ve yalniz ag hatasi olarak)
+  const beklenen = (r) =>
+    /favicon/i.test(r.url) ||
+    (/409/.test(r.text) && /scenario_rules/.test(r.url)) ||
+    (r.i >= enjeksiyonBasi && /ERR_FAILED|ERR_ABORTED|ERR_CONNECTION/.test(r.text) && /rest\/v1/.test(r.url));
   const errs = raw.filter((r) => !beklenen(r));
-  check("D11 konsolda beklenmeyen hata yok", errs.length === 0,
-    errs.map((e) => e.text + " <- " + e.url).slice(0, 3).join(" | ") || "yalniz favicon + beklenen 409");
+  check("D11 konsolda beklenmeyen hata yok (enjekte edilen hatalar ayri sayildi)", errs.length === 0,
+    errs.map((e) => e.text + " <- " + e.url).slice(0, 3).join(" | ") ||
+    `yalniz favicon + beklenen 409 + enjekte edilen ${raw.length - raw.filter((r) => r.i < enjeksiyonBasi).length} ag hatasi`);
 }
 
 const failed = results.filter((r) => !r.pass);

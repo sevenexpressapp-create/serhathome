@@ -5,8 +5,13 @@
 //    POST atar. Kapiyi cihaz sirri acar.
 //  · Bulut KESILSE DE termostat calisir: bu sinifin basarisizligi karar
 //    dongusunu HIC etkilemez, yalniz izleme/ayar durur.
-//  · Yeniden deneme GERI CEKILMELI (backoff): 5 sn -> 10 -> 20 ... en cok 5 dk.
-//    Boylece WiFi yokken kart surekli bosa baglanmaya calismaz.
+//  · NORMAL PERIYOT ile GERI CEKILME AYRIDIR (Y4):
+//      - basarili turdan sonra 30 sn'de bir konusulur (plan §2'deki deger),
+//      - hata halinde geri cekilme: 5 sn -> 10 -> 20 ... en cok 5 dk.
+//    Eskiden `due()` geri cekilme suresini normal periyot olarak kullaniyordu;
+//    basarida 5 sn'ye donuyordu = 17.280 cagri/gun ≈ 518.000/ay. Supabase
+//    ucretsiz tavani 500.000 -> plandaki "aylik 0 TL" sarti tutmuyordu.
+//    Simdi 2.880 cagri/gun ≈ 86.400/ay (tavanin %17'si).
 //  · TLS: sunucu sertifikasi ISRG Root X1'e karsi dogrulanir (supabase.co
 //    zinciri 14.10.2026'da olculdu: supabase.co <- Let's Encrypt YR1 <-
 //    ISRG Root YR <- ISRG Root X1).
@@ -23,13 +28,18 @@
 extern const char* ISRG_ROOT_X1_PEM;
 
 struct DeviceReport {
+  bool has_reading;   // false => temp/humidity NULL gider (uydurma 0.0 yok)
   float temp_c;
   float humidity;
   bool relay_on;
   bool sensor_ok;
   bool time_valid;
   bool rules_suspended;
-  float target_c;
+  float target_c;        // YURURLUKTEKI hedef
+  float base_target_c;   // kullanici/bulut tabani
+  bool rule_active;
+  int active_rule_hour;    // kural devrede degilse -1
+  int active_rule_minute;  // kural devrede degilse -1
   const char* reason;
   uint32_t uptime_s;
   int wifi_rssi;
@@ -50,10 +60,13 @@ class Cloud {
   }
   const String& lastError() const { return last_error_; }
 
+  uint32_t periodMs() const { return kSyncPeriodMs; }
+
   bool due(uint32_t now_ms) const {
     if (!configured()) return false;
-    if (!first_done_) return true;
-    return (uint32_t)(now_ms - last_attempt_ms_) >= backoff_ms_;
+    // Karar cekirdekte (platformdan bagimsiz) ki birim testi olsun.
+    return kombi::cloudDue(first_done_, last_ok_, now_ms, last_attempt_ms_, kSyncPeriodMs,
+                           backoff_ms_);
   }
 
   // Durumu gonderir, ayar+kurallari geri okur. Donus: basarili mi.
@@ -71,13 +84,29 @@ class Cloud {
 
     JsonDocument body;
     body["device_id"] = DEVICE_ID;
-    body["temp_c"] = rep.temp_c;
-    body["humidity"] = rep.humidity;
+    if (rep.has_reading) {
+      body["temp_c"] = rep.temp_c;
+      body["humidity"] = rep.humidity;
+    } else {
+      // Y7: gecerli okuma yok -> NULL. 0.0 gondermek panelde "DONMA RISKI"
+      // uretiyordu ve Faz 2 alarmini yanlis sebeple calistiracakti.
+      body["temp_c"] = nullptr;
+      body["humidity"] = nullptr;
+    }
     body["relay_on"] = rep.relay_on;
     body["sensor_ok"] = rep.sensor_ok;
     body["time_valid"] = rep.time_valid;
     body["rules_suspended"] = rep.rules_suspended;
     body["target_c"] = rep.target_c;
+    body["base_target_c"] = rep.base_target_c;
+    body["rule_active"] = rep.rule_active;
+    if (rep.active_rule_hour >= 0) {
+      body["active_rule_hour"] = rep.active_rule_hour;
+      body["active_rule_minute"] = rep.active_rule_minute;
+    } else {
+      body["active_rule_hour"] = nullptr;
+      body["active_rule_minute"] = nullptr;
+    }
     body["reason"] = rep.reason;
     body["uptime_s"] = rep.uptime_s;
     body["wifi_rssi"] = rep.wifi_rssi;
@@ -159,6 +188,8 @@ class Cloud {
   }
 
  private:
+  // Basari periyodu (plan §2: ~30 sn) — geri cekilmeden AYRI tutulur.
+  static const uint32_t kSyncPeriodMs = 30000;
   static const uint32_t kBaseBackoffMs = 5000;
   static const uint32_t kMaxBackoffMs = 300000;
 

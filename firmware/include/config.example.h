@@ -45,10 +45,21 @@
 #define TZ_OFFSET_SEC 10800
 
 // --- Seri konsol benzetim komutlari -----------------------------------------
-// 1 = `sim`/`wifi` komutlari acik (Faz 1 kabul testleri bunlarla olculuyor).
-// Kalici montajda (Faz 3/4) 0 yapilmali: USB'si elinde olan biri sahte sicaklik
-// basip roleyi surebilir.
-#define KOMBI_ALLOW_SIM 1
+// 0 = KAPALI (varsayilan, guvenli). 1 = `sim`/`wifi`/`wdtest` komutlari acik.
+//
+// ⚠️ Bu bayrak USB'si elinde olan birine roleyi surdurur (`sim temp 10` ->
+// isitma acilir). Bu yuzden:
+//   · sablon varsayilani 0'dir — `cp config.example.h config.h` diyen kimse
+//     sim'i acik bir kart elde etmez,
+//   · 1 yapilsa bile YALNIZ gelistirme ortaminda derlenir: `pio run -e esp32dev`
+//     (-DKOMBI_DEV_BUILD=1). Kalici montaj `pio run -e esp32dev_prod` ile
+//     derlenir ve o ortam bayragi zorla 0'a ceker.
+//   · Acilis bannerinda ve `info` ciktisinda `SIM=0/1` yaziyor: flash'lanmis
+//     kartta durum GOZLE olculebilir.
+// Derleme bayragi verilmisse (prod ortami) buradaki deger ezilmesin:
+#ifndef KOMBI_ALLOW_SIM
+#define KOMBI_ALLOW_SIM 0
+#endif
 
 // --- TLS ---------------------------------------------------------------------
 // 0 = sunucu sertifikasi ASIL koke karsi dogrulanir (asagidaki ISRG Root X1).

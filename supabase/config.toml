@@ -157,6 +157,13 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
+#
+# ⚠️ YAYIN (guvenlik denetimi YUKSEK-2): asagidaki deger YEREL yigin icindir.
+# Bulut projesinde bu alan panelin GERCEK adresi olmak zorunda; localhost
+# kalirsa parola sifirlama/dogrulama baglantilari yerel makineye isaret eder.
+# Yayin degeri:  https://<KOMBI-PANEL-ADRESI>.netlify.app
+# Nereden: Supabase panel -> Authentication -> URL Configuration -> Site URL
+# (adim adim: docs/SUPABASE-KURULUM.md §7.1)
 site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
@@ -174,16 +181,22 @@ enable_refresh_token_rotation = true
 # Requires enable_refresh_token_rotation = true.
 refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
-enable_signup = true
+# KAPALI (YUKSEK-2): panel Netlify'da herkese acik olacak ve proje adresi +
+# anon anahtar tarayiciya gidiyor. Signup acik kalirsa yabanci kendine hesap
+# acabilir. Kullanici SERHAT BEY tarafindan panelden elle eklenir
+# (Authentication -> Users -> Add user). Yonetici API'si (service_role) bu
+# ayardan etkilenmez; testler kullanici olusturmaya devam eder.
+enable_signup = false
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
-# Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
-minimum_password_length = 6
-# Passwords that do not meet the following requirements will be rejected as weak. Supported values
-# are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
-password_requirements = ""
+# YUKSEK-2: 6 karakter + captcha yok + 5 dk'da 30 deneme = parola puskurtmesi.
+# Hesap ele gecerse saldirgan hedefi 30 °C'de tutabilir, kurallari yeniden
+# yazabilir, donma korumasini sabote edebilir — denetcinin "internetten kombiye
+# uzanan en gercekci tek zincir" dedigi yol.
+minimum_password_length = 12
+password_requirements = "lower_upper_letters_digits_symbols"
 
 # Configure passkey sign-ins.
 # [auth.passkey]
@@ -205,20 +218,37 @@ anonymous_users = 30
 # Number of sessions that can be refreshed in a 5 minute interval per IP address.
 token_refresh = 150
 # Number of sign up and sign-in requests that can be made in a 5 minute interval per IP address (excludes anonymous users).
-sign_in_sign_ups = 30
+# 30 -> 10 (YUKSEK-2): tek kullanicili bir panelde 5 dakikada 10 giris denemesi
+# fazlasiyla yeterli; puskurtmenin hizini kirar.
+sign_in_sign_ups = 10
 # Number of OTP / Magic link verifications that can be made in a 5 minute interval per IP address.
 token_verifications = 30
 # Number of Web3 logins that can be made in a 5 minute interval per IP address.
 web3 = 30
 
 # Configure one of the supported captcha providers: `hcaptcha`, `turnstile`.
+#
+# ⚠️ YUKSEK-2 — CAPTCHA BULUT PROJESINDE ACILACAK, burada KAPALI BIRAKILDI.
+# Sebep durust olsun: captcha yerel yiginda acilirsa her giris bir captcha
+# jetonu ister ve kabul testleri (tests/rls_test.mjs, tests/panel_test.mjs)
+# kosulamaz hale gelir. Bu yuzden captcha, Supabase panelinden acilir:
+#   Authentication -> Attack Protection -> Enable Captcha protection
+#   (hCaptcha ya da Cloudflare Turnstile; gizli anahtar panele girilir)
+# Adim adim ve DOGRULAMA komutu: docs/SUPABASE-KURULUM.md §7.3
+# Bulut projesine `supabase config push` ile basilmak istenirse asagidaki blok
+# acilir ve gizli anahtar ortam degiskeninden okunur:
 # [auth.captcha]
 # enabled = true
 # provider = "hcaptcha"
-# secret = ""
+# secret = "env(KOMBI_HCAPTCHA_SECRET)"
 
 [auth.email]
-# Allow/disallow new user signups via email to your project.
+# ⚠️ BU ALANI false YAPMAYIN. Adi "signup" ama Supabase bunu
+# `GOTRUE_EXTERNAL_EMAIL_ENABLED`e esliyor: false olunca e-posta/parola ile
+# GIRIS de kapaniyor ve panel hic acilmiyor.
+# OLCULDU 14.10.2026: false iken giris -> 422 `email_provider_disabled`
+# ("Email logins are disabled"). Kayit kapatmayi yapan sey yukaridaki
+# genel `enable_signup = false`; o ayrica olculdu (422 `signup_disabled`).
 enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
@@ -226,7 +256,8 @@ double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
-secure_password_change = false
+# YUKSEK-2: calinmis bir oturum parolayi tek basina degistiremesin.
+secure_password_change = true
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
 max_frequency = "1s"
 # Number of characters used in the email OTP.

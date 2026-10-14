@@ -12,6 +12,13 @@
 //     sonucu, sorgunun hic calismamasindan gelmiyor.
 //   · Sonda MUTASYON var: RLS kapatiliyor ve ayni yetkisiz sorgu TEKRAR
 //     kosuluyor. Satir gelmezse testin aleti olu demektir -> test KIRMIZI olur.
+//
+// ⚠️ MUTASYON ADIMI VARSAYILAN OLARAK KAPALI (guvenlik denetimi ORTA-5).
+// `KOMBI_MUTATE=1` verilmeden kosulmaz. Sebep: adim `alter table ... disable
+// row level security` calistiriyor; `finally` geri aciyor ama kosum SIGKILL
+// alirsa ya da makine coker ise tablo RLS'SIZ KALIR. Bu yuzden:
+//   · yerelde:  KOMBI_MUTATE=1 node tests/rls_test.mjs   (aleti dogrulamak icin)
+//   · BULUTTA:  bayrak VERILMEZ. Canli projede RLS'i kapatan bir adim kosmaz.
 
 import { execFileSync } from "node:child_process";
 
@@ -130,6 +137,9 @@ await rest(`device_state`, {
 await rest(`telemetry`, {
   token: SERVICE, method: "POST", body: { device_id: DEVICE_ID, temp_c: 22.5, relay_on: false },
 });
+await rest(`events`, {
+  token: SERVICE, method: "POST", body: { device_id: DEVICE_ID, kind: "test_olay", detail: "tohum" },
+});
 
 // =========================================================================
 // 1) POZITIF KONTROL — sahibi kendi verisini GORUYOR.
@@ -157,6 +167,21 @@ await rest(`telemetry`, {
   check("P4 sahip saglik goruntusunu okuyor", r.status === 200 && r.data?.length === 1,
     `durum=${r.status} satir=${r.data?.length}`);
 }
+// P5/P6 — OLCUM BOSLUGU KAPATILDI (denetci isaretledi): `telemetry` ve `events`
+// icin SAHIP TARAFINDA pozitif kontrol yoktu. O yuzden politika bozulup
+// "kimse goremez" haline gelse bile N3/N7 yesil kalirdi (olu alet sinifi).
+{
+  const r = await rest(`telemetry?select=temp_c&device_id=eq.${DEVICE_ID}`, { token: tokA });
+  check("P5 sahip telemetriyi OKUYOR (N3'un olu alet olmadigi)",
+    r.status === 200 && r.data?.length >= 1 && Number(r.data[0].temp_c) === 22.5,
+    `durum=${r.status} satir=${r.data?.length} ilk=${r.data?.[0]?.temp_c}`);
+}
+{
+  const r = await rest(`events?select=kind`, { token: tokA });
+  check("P6 sahip olaylari OKUYOR (events icin sahip tarafi olcumu)",
+    r.status === 200 && r.data?.length === 1 && r.data[0].kind === "test_olay",
+    `durum=${r.status} satir=${r.data?.length} ilk=${r.data?.[0]?.kind}`);
+}
 
 // =========================================================================
 // 2) YETKISIZ GIRISLI KULLANICI — baska birinin cihazi
@@ -177,11 +202,56 @@ await rest(`telemetry`, {
     `durum=${r.status} satir=${r.data?.length}`);
 }
 {
+  const r = await rest(`events?select=kind`, { token: tokB });
+  check("N7 yabanci olaylari GOREMIYOR", r.status === 200 && r.data?.length === 0,
+    `durum=${r.status} satir=${r.data?.length}`);
+}
+{
+  // device_health icin OLUMSUZ EKSEN (denetci: "olumsuz eksen yok"). Goruntu
+  // security_invoker oldugu icin cagiranin RLS'i uygulanmali.
+  const r = await rest(`device_health?select=device_id`, { token: tokB });
+  check("N8 yabanci saglik goruntusunde HICBIR satir gormuyor",
+    r.status === 200 && r.data?.length === 0, `durum=${r.status} satir=${r.data?.length}`);
+}
+{
   const r = await rest(`device_settings?device_id=eq.${DEVICE_ID}`, {
     token: tokB, method: "PATCH", body: { target_c: 30 }, prefer: "return=representation",
   });
   const blocked = r.status >= 400 || (Array.isArray(r.data) && r.data.length === 0);
   check("N4 yabanci hedefi DEGISTIREMIYOR", blocked, `durum=${r.status} veri=${JSON.stringify(r.data)}`);
+}
+{
+  // Denetcinin isaretledigi bosluk: yabanci BASKASININ device_id'siyle
+  // scenario_rules'a INSERT edemiyor mu? (with check politikasi)
+  const r = await rest(`scenario_rules`, {
+    token: tokB, method: "POST",
+    body: { device_id: DEVICE_ID, days_mask: 127, hour: 4, minute: 0, target_c: 30 },
+    prefer: "return=representation",
+  });
+  const after = await rest(`scenario_rules?select=hour&hour=eq.4`, { token: tokA });
+  check("N9 yabanci BASKASININ cihazina kural EKLEYEMIYOR",
+    r.status >= 400 && (after.data?.length ?? 0) === 0,
+    `durum=${r.status} kod=${r.data?.code ?? "-"} sahip_gorunum_satir=${after.data?.length}`);
+}
+{
+  // ORTA-3: panel oturumu cihaz SIRRINI degistiremez (calinmis oturum cihazi
+  // taklit edip gercek ESP32'yi kalici 401'e dusuremesin).
+  const r = await rest(`devices?id=eq.${DEVICE_ID}`, {
+    token: tokA, method: "PATCH", body: { secret_sha256: "c".repeat(64) },
+    prefer: "return=representation",
+  });
+  const after = await rest(`devices?select=secret_sha256,name`, { token: tokA });
+  const unchanged = after.data?.[0]?.secret_sha256 === "a".repeat(64);
+  check("N10 (ORTA-3) SAHIBI bile cihaz sirrini DEGISTIREMIYOR", r.status >= 400 && unchanged,
+    `durum=${r.status} kod=${r.data?.code ?? "-"} ozet_degismedi=${unchanged}`);
+
+  // POZITIF KONTROL (ayni eksen): ADI degistirebiliyor -> N10 "panel hic
+  // yazamiyor"dan degil, SUTUN BAZLI yetkiden geliyor.
+  const rn = await rest(`devices?id=eq.${DEVICE_ID}`, {
+    token: tokA, method: "PATCH", body: { name: "Yeni ad" }, prefer: "return=representation",
+  });
+  check("N10b POZITIF KONTROL: sahip cihaz ADINI degistirebiliyor",
+    rn.status === 200 && rn.data?.[0]?.name === "Yeni ad", `durum=${rn.status}`);
 }
 {
   // Gercekten degismemis mi? Sahibinin gozuyle dogrula (vekil degil, hedefin kendisi).
@@ -253,28 +323,64 @@ for (const tbl of ["devices", "device_state", "device_settings", "telemetry", "s
 
 // =========================================================================
 // 5) MUTASYON / POZITIF KONTROL — aletin olu olmadiginin kaniti.
-//    RLS'i kapatip ayni yetkisiz sorguyu tekrar kosuyoruz. Satir GELMELI;
+//    RLS'i kapatip ayni yetkisiz sorgulari TEKRAR kosuyoruz. Satir GELMELI;
 //    gelmezse "0 satir" sonucumuz RLS'ten degil baska bir seyden geliyordu.
+//
+//    ORTA-5: YALNIZ `KOMBI_MUTATE=1` ile. Bulut projesinde KOSULMAZ.
+//    Denetcinin istedigi bosluk: mutasyon yalniz `devices`'a uygulanmisti;
+//    simdi `telemetry` de kapsamda (her tablonun kendi kapisi ayri).
 // =========================================================================
-let leaked = -1;
-try {
-  sql("alter table public.devices disable row level security;");
-  const r = await rest(`devices?select=id`, { token: tokB });
-  leaked = Array.isArray(r.data) ? r.data.length : -1;
-  check("M1 MUTASYON: RLS kapatilinca yabanci cihazi GORUYOR (alet canli)", leaked === 1,
-    `satir=${leaked} (RLS kapaliyken)`);
+const MUTATE = process.env.KOMBI_MUTATE === "1";
+if (!MUTATE) {
+  console.log("ATLANDI M1-M4 mutasyon adimi — `KOMBI_MUTATE=1` verilmedi " +
+    "(canli projede RLS kapatilmaz). Yerelde aleti dogrulamak icin bayragi verin.");
+} else {
+  if (!/127\.0\.0\.1|localhost/.test(URL_)) {
+    console.log("DUR: mutasyon adimi YALNIZ yerel yigina karsi kosulabilir. Hedef: " + URL_);
+    process.exit(2);
+  }
+  try {
+    sql("alter table public.devices disable row level security;");
+    // Sorgu BU TESTIN cihazina daraltildi: tohum veri (seed_demo) baska cihazlar
+    // da ekliyor; "tam 1 satir" beklemek olcumu veritabanindaki diger satirlara
+    // bagli kiliyordu (olculdu: 3 satir -> sahte kirmizi).
+    const r = await rest(`devices?select=id&id=eq.${DEVICE_ID}`, { token: tokB });
+    const leaked = Array.isArray(r.data) ? r.data.length : -1;
+    check("M1 MUTASYON: RLS kapatilinca yabanci cihazi GORUYOR (alet canli)", leaked === 1,
+      `satir=${leaked} (RLS kapaliyken, yalniz ${DEVICE_ID})`);
 
-  // Bonus: ikinci bagimsiz kapi — anon'un yetkisi geri alindigi icin RLS
-  // kapaliyken DE anon okuyamiyor.
-  const ra = await rest(`devices?select=id`);
-  check("M2 RLS kapaliyken bile anon okuyamiyor (yetki geri alinmis = 2. kapi)",
-    ra.status >= 400, `durum=${ra.status} kod=${ra.data?.code ?? "-"}`);
-} finally {
-  sql("alter table public.devices enable row level security;");
-}
-{
-  const r = await rest(`devices?select=id`, { token: tokB });
-  check("M3 RLS geri acildi, yabanci yine GOREMIYOR", r.data?.length === 0, `satir=${r.data?.length}`);
+    // Bonus: ikinci bagimsiz kapi — anon'un yetkisi geri alindigi icin RLS
+    // kapaliyken DE anon okuyamiyor.
+    const ra = await rest(`devices?select=id&id=eq.${DEVICE_ID}`);
+    check("M2 RLS kapaliyken bile anon okuyamiyor (yetki geri alinmis = 2. kapi)",
+      ra.status >= 400, `durum=${ra.status} kod=${ra.data?.code ?? "-"}`);
+  } finally {
+    sql("alter table public.devices enable row level security;");
+  }
+  {
+    const r = await rest(`devices?select=id&id=eq.${DEVICE_ID}`, { token: tokB });
+    check("M3 RLS geri acildi, yabanci yine GOREMIYOR", r.data?.length === 0, `satir=${r.data?.length}`);
+  }
+  // MUTASYON 2 — telemetry. `telemetry`nin kapisi `devices`'tan BAGIMSIZ
+  // (owns_device + geri alinmis yetki); o yuzden ayrica olculuyor.
+  try {
+    sql("alter table public.telemetry disable row level security;");
+    sql("grant select on public.telemetry to authenticated;");
+    const r = await rest(`telemetry?select=temp_c&device_id=eq.${DEVICE_ID}`, { token: tokB });
+    check("M4 MUTASYON: telemetry RLS'i kapatilinca yabanci satiri GORUYOR (N3 canli)",
+      (r.data?.length ?? 0) >= 1, `satir=${r.data?.length} durum=${r.status}`);
+  } finally {
+    sql("alter table public.telemetry enable row level security;");
+    sql("revoke all on public.telemetry from authenticated; grant select on public.telemetry to authenticated;");
+  }
+  {
+    const r = await rest(`telemetry?select=temp_c&device_id=eq.${DEVICE_ID}`, { token: tokB });
+    check("M5 telemetry RLS geri acildi, yabanci yine GOREMIYOR", r.data?.length === 0,
+      `satir=${r.data?.length}`);
+    const own = await rest(`telemetry?select=temp_c`, { token: tokA });
+    check("M6 ...ve SAHIBI hala goruyor (geri alma dogru yapildi)", (own.data?.length ?? 0) >= 1,
+      `sahip_satir=${own.data?.length}`);
+  }
 }
 
 // --- temizlik ---

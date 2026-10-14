@@ -29,13 +29,25 @@ create table if not exists public.devices (
 -- AYNI; bozuk deger iki tarafta da reddedilsin.
 create table if not exists public.device_settings (
   device_id        text primary key references public.devices (id) on delete cascade,
+  -- TABAN hedef. Saatli kural bunu EZMEZ; yururlukteki hedef cihazda
+  -- hesaplanir ve `device_state.target_c` olarak geri bildirilir.
   target_c         numeric(4, 1) not null default 21.0 check (target_c >= 5 and target_c <= 30),
-  hysteresis_c     numeric(3, 1) not null default 3.0 check (hysteresis_c >= 0.5 and hysteresis_c <= 6),
+  -- Alt sinir SENSORDEN turer: DHT11'in cozunurlugu 1.0 °C, bant 2 x 1.0'in
+  -- altinda olursa tek LSB sicramasi roleyi salindirir (cihazdaki MIN_BAND_C).
+  hysteresis_c     numeric(3, 1) not null default 3.0 check (hysteresis_c >= 2.0 and hysteresis_c <= 6),
   freeze_guard_c   numeric(3, 1) not null default 6.0 check (freeze_guard_c >= 4 and freeze_guard_c <= 12),
   manual_mode      boolean not null default false,
   min_relay_hold_s integer not null default 300 check (min_relay_hold_s >= 0 and min_relay_hold_s <= 1800),
-  sensor_timeout_s integer not null default 120 check (sensor_timeout_s >= 10 and sensor_timeout_s <= 3600),
-  updated_at       timestamptz not null default now()
+  -- Taban 60 sn: DHT11 2 sn'de bir okunur ve ARALIKLI kacirmasi normaldir.
+  -- 10 sn ile 5 kacan okuma "ariza" sayilip isi kesiliyor VE donma korumasi
+  -- devre disi kaliyordu (guvenlik denetimi YUKSEK-3).
+  sensor_timeout_s integer not null default 120 check (sensor_timeout_s >= 60 and sensor_timeout_s <= 3600),
+  updated_at       timestamptz not null default now(),
+  -- Donma esigi hedefin ALTINDA kalmak zorunda; yoksa "zorla isitma" kullanici
+  -- hedefini anlamsiz kilar (hedef 5 iken esik 12 yazilabiliyordu). Cihazdaki
+  -- clampSettings ile AYNI kisit.
+  constraint device_settings_freeze_below_target
+    check (freeze_guard_c <= target_c - 0.5)
 );
 
 -- ---------------------------------------------------------------------------
@@ -48,7 +60,14 @@ create table if not exists public.device_state (
   sensor_ok       boolean,
   time_valid      boolean,
   rules_suspended boolean,
+  -- target_c = YURURLUKTEKI hedef (kural devredeyse kuralin hedefi).
+  -- base_target_c = kullanicinin/panelin yazdigi TABAN hedef.
+  -- rule_active + active_rule_* = "su an neden 25 °C?" sorusunun cevabi.
   target_c        numeric(4, 1),
+  base_target_c   numeric(4, 1),
+  rule_active     boolean,
+  active_rule_hour   smallint check (active_rule_hour is null or (active_rule_hour >= 0 and active_rule_hour <= 23)),
+  active_rule_minute smallint check (active_rule_minute is null or (active_rule_minute >= 0 and active_rule_minute <= 59)),
   reason          text,
   uptime_s        integer,
   wifi_rssi       integer,
@@ -117,7 +136,39 @@ create table if not exists public.telemetry (
 );
 create index if not exists telemetry_device_ts_idx on public.telemetry (device_id, ts desc);
 
+-- O7 — TELEMETRI BUDAMA. 30 sn'de bir konusan bir cihaz gunde ~1.440 satir
+-- uretir (sunucu araliklamasi 55 sn: ~1.570/gun); ucretsiz katmanin 500 MB
+-- disk siniri icin tek cihazda yillarca sorun olmaz, ama politika YAZILI olsun.
+-- Panel 24 saatlik gecmis gosteriyor; 30 gun fazlasiyla yeterli.
+-- Faz 2'de pg_cron ile gunde bir kez cagrilacak (ayni yerde "cihaz sustu"
+-- kontrolu de kurulacak):
+--   select cron.schedule('kombi-telemetri-buda', '17 3 * * *',
+--                        $$select public.prune_telemetry(30)$$);
+create or replace function public.prune_telemetry(p_keep_days integer default 30)
+  returns bigint
+  language plpgsql
+  security definer
+  set search_path = ''
+as $$
+declare
+  n bigint;
+begin
+  if p_keep_days < 1 then
+    raise exception 'p_keep_days >= 1 olmali';
+  end if;
+  delete from public.telemetry where ts < now() - make_interval(days => p_keep_days);
+  get diagnostics n = row_count;
+  return n;
+end;
+$$;
+-- Yalniz service_role/cron cagirir; panel kullanicisi veri SILEMEZ.
+revoke all on function public.prune_telemetry(integer) from public;
+
 -- Olaylar (sensor arizasi, acilis, bekci sifirlamasi...). Faz 2 alarmlari buradan beslenir.
+-- ⚠️ O2 — BU TABLONUN HENUZ URETICISI YOK: cihaz yazilimi `event` alani
+-- gondermiyor, `device-sync` de yalniz gelirse yaziyor. Yani Faz 2'nin
+-- "sensor arizasi / bekci sifirlamasi" alarmlari su an VERI KAYNAKSIZ.
+-- Uretici Faz 2'de eklenecek (cihaz tarafinda olay kuyrugu).
 create table if not exists public.events (
   id        bigserial primary key,
   device_id text not null references public.devices (id) on delete cascade,
@@ -158,6 +209,11 @@ select d.id                                              as device_id,
        s.temp_c,
        s.relay_on,
        s.sensor_ok,
+       s.target_c,
+       s.base_target_c,
+       s.rule_active,
+       -- temp_c NULL ise donma riski YOKTUR (cihaz artik gecersiz okumada 0.0
+       -- degil NULL bildiriyor — kod denetimi Y7).
        (s.temp_c is not null and s.temp_c < 6)           as freeze_risk
 from public.devices d
 left join public.device_state s on s.device_id = d.id;
@@ -225,7 +281,15 @@ revoke all on public.device_state from authenticated;
 revoke all on public.telemetry from authenticated;
 revoke all on public.events from authenticated;
 
-grant select, insert, update, delete on public.devices to authenticated;
+-- ORTA-3: panel `devices` tablosunda YALNIZ adi degistirebilir. Calinmis bir
+-- panel oturumu `secret_sha256`'yi kendi sectigiyle degistirip cihazi taklit
+-- edebiliyordu (gercek ESP32 kalici 401 alirdi). Sutun bazli yetki.
+-- ⚠️ Once GERI AL: Supabase'in varsayilan yetkileri yeni tabloda `authenticated`
+-- role TUM UPDATE hakkini veriyor; yalniz `grant update (name)` yazmak eski
+-- genis hakki KALDIRMAZ (olculdu 14.10.2026: sir degistirilebiliyordu).
+revoke all on public.devices from authenticated;
+grant select, insert, delete on public.devices to authenticated;
+grant update (name) on public.devices to authenticated;
 grant select, insert, update, delete on public.device_settings to authenticated;
 grant select on public.device_state to authenticated;
 grant select, insert, update, delete on public.scenario_rules to authenticated;

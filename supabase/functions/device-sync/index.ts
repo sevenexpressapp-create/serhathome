@@ -42,9 +42,25 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+// null/undefined -> null (Y7: cihaz gecerli okuma yokken NULL bildiriyor,
+// 0.0 UYDURMA degeri gondermiyor). Sayi olmayan govde alani da null olur.
 function num(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+// Aralik disi sayiyi NULL'a cevirir: sema `check` kisitiyla 500 uretmek yerine
+// alani bos birakiriz (cihaz bozuk/yabanci bir deger gonderse de kapi kapali).
+function numRange(v: unknown, lo: number, hi: number): number | null {
+  const n = num(v);
+  if (n === null) return null;
+  return n >= lo && n <= hi ? n : null;
+}
+
+function intRange(v: unknown, lo: number, hi: number): number | null {
+  const n = numRange(v, lo, hi);
+  return n === null ? null : Math.round(n);
 }
 
 Deno.serve(async (req) => {
@@ -79,18 +95,25 @@ Deno.serve(async (req) => {
   }
 
   // Govdedeki device_id'ye GUVENILMEZ; her zaman basliktan dogrulanan kimlik kullanilir.
+  // Sayisal alanlar semanin kabul ettigi araliga kirpilir/NULL'lanir; boylece
+  // bozuk bir govde tabloyu da 500'u da tetiklemez.
   const state = {
     device_id: device.id,
-    temp_c: num(body.temp_c),
-    humidity: num(body.humidity),
+    temp_c: numRange(body.temp_c, -60, 120),
+    humidity: numRange(body.humidity, 0, 100),
     relay_on: Boolean(body.relay_on),
     sensor_ok: Boolean(body.sensor_ok),
     time_valid: Boolean(body.time_valid),
     rules_suspended: Boolean(body.rules_suspended),
-    target_c: num(body.target_c),
+    // target_c = YURURLUKTEKI hedef, base_target_c = taban (plan §K1).
+    target_c: numRange(body.target_c, 0, 40),
+    base_target_c: numRange(body.base_target_c, 0, 40),
+    rule_active: body.rule_active === undefined ? null : Boolean(body.rule_active),
+    active_rule_hour: intRange(body.active_rule_hour, 0, 23),
+    active_rule_minute: intRange(body.active_rule_minute, 0, 59),
     reason: typeof body.reason === "string" ? body.reason.slice(0, 32) : null,
-    uptime_s: num(body.uptime_s),
-    wifi_rssi: num(body.wifi_rssi),
+    uptime_s: intRange(body.uptime_s, 0, 2_147_483_647),
+    wifi_rssi: intRange(body.wifi_rssi, -200, 50),
     fw_version: typeof body.fw_version === "string" ? body.fw_version.slice(0, 48) : null,
     last_seen_at: new Date().toISOString(),
   };
