@@ -26,7 +26,10 @@ yandı; doğru satırdan yeniden ölçünce 5/5 geçti. Kartta bir sorun yoktu.
 takip edilecek adımlar, kabul ölçümleri ve geri dönüş yolu.
 
 **Kalan tıkayıcılar:**
-1. **10 kΩ pull-up** GPIO 23 – 3V3 arasına — takılmadan bağlantı yapılmaz.
+1. **10 kΩ pull-up** GPIO 23 – 3V3 arasına — **15.10 02:00'de tıkayıcılıktan
+   çıkarıldı** (gerekçe: `docs/FAZ3-KONTROL-LISTESI.md` §B1 — modül ACTIVE LOW,
+   boşta giriş röleyi süremez; röle yanlışlıkla çekili kalsa bile sonuç
+   klemensin bugünkü köprülü hâliyle aynı). Önerilir, bağlantıyı geciktirmez.
    Kartta var mı belirsiz: üst yüzde DHT11'in yanında dik duran tek direnç var,
    konumu onun **sensör pull-up'ı** olduğunu düşündürüyor (GPIO 18), lehim
    yüzünde yalnız beyaz atlama telleri görünüyor. Belirsizliği kapatmanın ucuz

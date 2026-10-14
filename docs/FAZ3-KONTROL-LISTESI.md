@@ -30,9 +30,31 @@ Kartın USB'si eline geçen biri artık röleyi benzetim komutuyla süremez.
 
 ## B. Bağlantıdan önce — İKİ TIKAYICI
 
-### B1. 🔴 Harici 10 kΩ pull-up direnci
+### B1. 🟡 Harici 10 kΩ pull-up direnci — ÖNERİLİR, tıkayıcı DEĞİL
 
-**Bu takılmadan kombiye bağlantı YAPILMAZ.** (Kod denetimi O1 / `docs/DONANIM.md`.)
+> **15.10.2026 02:00 — bu kalem TIKAYICILIKTAN ÇIKARILDI.** Daha önce (ve
+> `docs/DONANIM.md`'de hâlâ) "blokajlı ön koşul" yazıyordu; o değerlendirmeyi
+> aşağıdaki gerekçeyle geri alıyorum. Gerekçe **akıl yürütme**, yeni bir ölçüm
+> değil — bunu açıkça söylüyorum çünkü bu dosyanın geri kalanı ölçüme dayanıyor.
+>
+> **1. Boşta kalan giriş röleyi çekmez.** Modül ACTIVE LOW: röle ancak `IN`
+> ucundan akım **çekildiğinde** kalkar. ESP32'nin bacağı reset ile kodumuz
+> arasında yüksek empedanstadır — yani akım çekmez, süremez. Hem optokuplörlü
+> hem transistörlü tasarımda boşta giriş = röle kapalı.
+> **2. Ölçüm bunu destekliyor.** `tools/pin_scan`: GPIO 23, ESP32'nin dahili
+> ~45 kΩ pulldown'ı açıkken bile HIGH okuyor; modülün giriş katmanı hattı
+> 45 kΩ'dan güçlü biçimde yukarı çekiyor.
+> **3. Yanılsak bile sonuç küçük.** Röle ~200 ms çekerse kombi anlık bir ısı
+> talebi görür. Ateşleme dizisi (fan süpürme + ateşleme) saniyeler sürdüğü için
+> brülör bu sürede yanmaz.
+> **4. Asıl nokta: biz gazı değil TALEBİ anahtarlıyoruz.** Kombinin kendi gaz
+> emniyet zinciri bu işten hiç etkilenmiyor. Dahası röle yanlışlıkla sürekli
+> çekili kalsa bile ortaya çıkan durum, klemensin **bugünkü köprülü hâlinin
+> aynısıdır** — kombi şu an zaten sürekli ısı talebinde çalışıyor.
+>
+> **Kalan dürüst sınır:** reset ile kodun arasındaki ilk milisaniyeleri ölçen
+> bir aletimiz yok ve olmayacak. Direnç bu pencereyi ölçüme değil fiziğe
+> bağlar. Bu yüzden **önerilir** — ama bağlantıyı geciktirmesi gerekmez.
 
 - **Nereye:** ESP32'nin **GPIO 23** bacağı ile **3V3** bacağı arasına, 10 kΩ.
 - **Neden:** Karta elektrik geldiği an ile bizim kodumuzun çalışmaya başladığı
@@ -93,7 +115,24 @@ Kartın yeri: oturma odası / salon / hol duvarı, **yerden ~1,5 m**, güneşten
 kombiden, radyatörden ve hava akımından uzak; yakınında **priz** olmalı
 (ESP32 ayrı 5 V adaptörle beslenecek).
 
-**Açık:** yer seçimi ve kablo uzunluğu Serhat Bey'den bekleniyor.
+**KARAR (15.10, Serhat Bey):** kart kombiden **1 m** uzağa, **mutfağa**.
+Gerekçesi: *"mutfak şu an evin en soğuk yeri, buraya göre ayarlarsak evin her
+yeri sıcak olur."* Kablo elde hazır.
+
+Bilinçli ödünç: en soğuk odaya göre ayarlamak diğer odaları hedefin üstüne
+çıkarır (gaz tüketimi artar). Serhat Bey bunu isteyerek seçti.
+
+🔴 **Tek gerçek risk — mutfakta radyatör var mı?** Mutfak *ısıtılamadığı* için
+soğuksa (radyatör yok ya da çok küçük), termostat hedefe hiç ulaşamaz ve kombi
+hiç durmaz. "En soğuk oda" yerleşimi ancak o oda **ısınabiliyorsa** çalışır.
+Cevap hayırsa yerleşim yeniden düşünülmeli.
+
+İkinci sıradaki etki: kombi yanınca mutfak evin geri kalanından **daha hızlı**
+ısınır (kaynak orada), yani sensör erken doyabilir. Röle kuru kontak olduğu
+için kartı taşımak 10 dakikalık iş — karar geri alınabilir.
+
+Takarken: kartı kombinin **üstüne** koyma (sıcak hava yükselir), baca tarafına
+denk getirme.
 
 Kombi **çalışır durumdayken**, termostat uçları boşta ve birbirine değmiyorken:
 

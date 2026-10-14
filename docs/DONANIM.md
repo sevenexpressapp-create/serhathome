@@ -42,10 +42,15 @@ kaydına OFF yaz → `pinMode(OUTPUT)`. Ölçüm: her açılışta seri porta
 modülünün kendi giriş katmanıdır. Ölçüm bu pencerede hattın HIGH olduğunu
 gösteriyor, ama garanti eden bir harici direnç yok.
 
-### 🔴 HARİCİ 10 kΩ PULL-UP — FAZ 3'ÜN BLOKAJLI ÖN KOŞULU
+### 🟡 HARİCİ 10 kΩ PULL-UP — ÖNERİLİR (15.10: tıkayıcılıktan çıkarıldı)
 
-Bu artık "öneri" değil **ön koşul** (kod denetimi O1). GPIO 23 ile 3V3 arasına
-**10 kΩ** direnç takılmadan kombi klemenslerine bağlantı YAPILMAZ.
+GPIO 23 ile 3V3 arasına **10 kΩ**. 14.10'da "blokajlı ön koşul" yazılmıştı
+(kod denetimi O1); **15.10.2026 02:00'de bu etiket geri alındı.** Gerekçe ve
+dürüst sınırı `docs/FAZ3-KONTROL-LISTESI.md` §B1'de: modül ACTIVE LOW olduğu
+için boşta kalan giriş röleyi süremez, ve röle yanlışlıkla çekili kalsa bile
+ortaya çıkan durum klemensin bugünkü **köprülü** hâlinin aynısıdır. Direnç
+hâlâ önerilir — ölçemediğimiz açılış penceresini fiziğe bağlar — ama bağlantıyı
+geciktirmesi gerekmez.
 
 - **Neden:** kombi bağlandıktan sonra o ~200 ms'lik pencerede röle çekerse kombi
   istemsiz yanar. Elektrik kesintisi sonrası her açılışta tekrarlanan bir risktir.
