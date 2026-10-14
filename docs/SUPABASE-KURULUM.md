@@ -177,8 +177,31 @@ localhost kalırsa bağlantılar Serhat Bey'in makinesine işaret eder.
 > doğru yer genel `enable_signup` ayarıdır.
 
 ### 7.3 Captcha (Authentication → Attack Protection)
-- **Enable Captcha protection** → sağlayıcı: hCaptcha ya da Cloudflare Turnstile
-- Gizli anahtarı panele girin (depoya YAZILMAZ)
+
+> 🔴 **ŞİMDİ AÇMAYIN — kendinizi panelden kilitlersiniz.** Ölçüldü 15.10.2026:
+> `dashboard/app.js` ve `index.html` içinde captcha ile ilgili **hiç kod yok**;
+> giriş `signInWithPassword({ email, password })` ile yapılıyor ve
+> `captchaToken` göndermiyor (`app.js:80-83`). Supabase tarafında captcha
+> açılırsa her giriş isteği reddedilir ve panele girilemez.
+> MFA'daki (§7.4) tuzağın aynısı: **sunucu tarafını, arayüz tarafı hazır
+> olmadan sertleştirmeyin.**
+
+Doğru sıra (ikisi aynı turda, Faz 2'de yayınla birlikte):
+1. hcaptcha.com'da ücretsiz hesap + site tanımı. İki anahtar verir:
+   **sitekey** (herkese açık, giriş sayfasına gömülür) ve
+   **secret** (gizli, yalnız Supabase paneline girilir, **depoya YAZILMAZ**).
+2. Giriş ekranına hCaptcha bileşenini ekleyin ve jetonu
+   `signInWithPassword({ email, password, options: { captchaToken } })`
+   ile gönderin.
+3. Ancak ondan sonra Supabase'de **Enable Captcha protection** → hCaptcha,
+   secret'ı girin.
+4. Ölçün: captcha'sız bir giriş denemesi reddedilmeli (negatif kontrol),
+   arayüzden normal giriş geçmeli (pozitif kontrol). İkisi de ölçülmeden
+   "captcha çalışıyor" denmez.
+
+Aciliyet düşük: captcha'nın işi, panel **internete açıldıktan sonra** giriş
+ekranına yapılan otomatik deneme saldırılarını kesmek. Panel yayınlanmadan
+önce açılmasının güvenlik kazancı yok, kilitlenme riski var.
 
 Yerelde **bilerek kapalı**: captcha açıkken her giriş bir captcha jetonu ister ve
 kabul testleri (`tests/panel_test.mjs`, `tests/rls_test.mjs`) koşulamaz hale gelir.
