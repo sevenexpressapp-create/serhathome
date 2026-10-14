@@ -1,0 +1,28 @@
+# --- SIRLAR (asla depoya girmez) ---
+firmware/include/config.h
+dashboard/config.js
+supabase/.env
+supabase/.env.local
+.env
+.env.*
+!.env.example
+*.secret
+device-secret*.txt
+
+# --- PlatformIO ---
+firmware/.pio/
+firmware/.vscode/
+.pio/
+
+# --- Supabase yerel yigin ---
+supabase/.branches/
+supabase/.temp/
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+
+# --- Olcum/gecici ---
+*.log
+tests/out/
+.DS_Store

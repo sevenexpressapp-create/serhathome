@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kombi Kontrol</title>
+<meta name="description" content="Evdeki kombinin oda sicakligini izleme ve hedef/senaryo ayarlari.">
+<meta name="color-scheme" content="light dark">
+<style>
+  /* Renk rolleri tek yerde; aydinlik/karanlik burada takas edilir.
+     Degerler dataviz referans paletinden; grafik renkleri dogrulayicidan
+     GECTI (light #2a78d6/#eb6834, dark #3987e5/#d95926 — her iki modda
+     tum kontroller PASS). */
+  :root {
+    color-scheme: light;
+    --plane: #f9f9f7;
+    --surface: #fcfcfb;
+    --text: #0b0b0b;
+    --text-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --good: #0ca30c;
+    --critical: #d03b3b;
+    --warning: #fab219;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --plane: #0d0d0d;
+      --surface: #1a1a19;
+      --text: #f0efec;
+      --text-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plane: #0d0d0d;
+    --surface: #1a1a19;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--plane);
+    color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--text-2); font-size: 13px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: var(--text-2); font-weight: 600; letter-spacing: 0.01em; }
+  .hero { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+  .hero-num { font-size: 48px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
+  .hero-unit { font-size: 20px; color: var(--text-2); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-top: 16px; }
+  .tile { border-top: 1px solid var(--grid); padding-top: 8px; }
+  .tile .k { font-size: 12px; color: var(--muted); }
+  .tile .v { font-size: 17px; font-weight: 600; margin-top: 2px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; color: var(--text);
+    background: var(--surface); border: 1px solid var(--axis);
+    border-radius: 9px; padding: 10px 14px; cursor: pointer; min-height: 44px;
+  }
+  button:active { transform: translateY(1px); }
+  button.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+  button.step { min-width: 52px; font-size: 20px; }
+  button.link { background: none; border: none; color: var(--series-1); padding: 6px; min-height: 36px; }
+  input, select {
+    font: inherit; color: var(--text); background: var(--surface);
+    border: 1px solid var(--axis); border-radius: 9px; padding: 10px; min-height: 44px; width: 100%;
+  }
+  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+  .target-val { font-size: 32px; font-weight: 600; min-width: 96px; text-align: center; font-variant-numeric: tabular-nums; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--muted); font-size: 12px; font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .err { color: var(--critical); font-size: 14px; margin-top: 8px; }
+  #chart { width: 100%; height: 240px; display: block; touch-action: pan-y; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-2); margin-top: 4px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: 2px; margin-right: 6px; }
+  .tooltip {
+    position: absolute; pointer-events: none; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px;
+    font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); white-space: nowrap; opacity: 0;
+  }
+  .chartbox { position: relative; }
+  .hidden { display: none !important; }
+  details summary { cursor: pointer; font-size: 14px; color: var(--text-2); font-weight: 600; }
+  details[open] summary { margin-bottom: 12px; }
+  @media (max-width: 420px) { .hero-num { font-size: 40px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Kombi Kontrol</h1>
+      <div class="sub" id="device-name">—</div>
+    </div>
+    <button class="link" id="theme-toggle" type="button" aria-label="Temayi degistir">tema</button>
+  </header>
+
+  <!-- GIRIS -->
+  <section class="card" id="auth-card">
+    <h2>Giris</h2>
+    <!-- Sifre alani bir <form> icinde olmak zorunda: Chrome aksi halde
+         "Password field is not contained in a form" uyarisi veriyor ve sifre
+         yoneticileri alani dogru taniyamiyor (tarayici olcumunde yakalandi). -->
+    <form id="auth-form" autocomplete="on">
+      <div style="margin-bottom:12px">
+        <label for="email">E-posta</label>
+        <input id="email" name="email" type="email" autocomplete="username" inputmode="email">
+      </div>
+      <div style="margin-bottom:12px">
+        <label for="password">Sifre</label>
+        <input id="password" name="password" type="password" autocomplete="current-password">
+      </div>
+      <button class="primary" id="signin" type="submit">Giris yap</button>
+    </form>
+    <div class="err hidden" id="auth-err"></div>
+    <p class="note">Oturum tarayicida saklanir; her acilista yeniden giris istemez.</p>
+  </section>
+
+  <!-- PANEL -->
+  <main id="app" class="hidden">
+    <section class="card">
+      <h2>Anlik durum</h2>
+      <div class="hero">
+        <div><span class="hero-num" id="temp">—</span><span class="hero-unit"> °C</span></div>
+        <div class="pill" id="relay-pill"><span class="dot" style="background:var(--muted)"></span><span id="relay-text">—</span></div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="k">Nem</div><div class="v" id="hum">—</div></div>
+        <div class="tile"><div class="k">Cihazdaki hedef</div><div class="v" id="target-now">—</div></div>
+        <div class="tile"><div class="k">Cihaz</div><div class="v" id="online">—</div></div>
+        <div class="tile"><div class="k">Karar</div><div class="v" id="reason">—</div></div>
+      </div>
+      <div class="note" id="seen">—</div>
+      <div class="err hidden" id="alerts"></div>
+    </section>
+
+    <section class="card">
+      <h2>Hedef sicaklik</h2>
+      <div class="row">
+        <button class="step" id="t-minus" type="button" aria-label="Hedefi dusur">−</button>
+        <div class="target-val"><span id="target-val">—</span> °C</div>
+        <button class="step" id="t-plus" type="button" aria-label="Hedefi yukselt">+</button>
+        <button class="primary" id="t-save" type="button">Kaydet</button>
+      </div>
+      <p class="note">Cihaz ayari en gec 30 saniyede indirir. Karar cihazda verilir; internet kesilse de termostat calisir.</p>
+      <div class="err hidden" id="t-err"></div>
+    </section>
+
+    <section class="card">
+      <h2>Sicaklik gecmisi</h2>
+      <div class="chartbox">
+        <svg id="chart" role="img" aria-labelledby="chart-title"><title id="chart-title">Oda sicakligi, son 24 saat</title></svg>
+        <div class="tooltip" id="tip"></div>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--series-1)"></i>Oda sicakligi</span>
+        <span><i style="background:var(--series-2)"></i>Isitma acik</span>
+        <span><i style="background:var(--muted)"></i>Hedef</span>
+      </div>
+      <div class="empty hidden" id="chart-empty">Henuz kayitli veri yok. Cihaz baglandiginda gecmis burada birikir.</div>
+      <details style="margin-top:12px">
+        <summary>Veriyi tablo olarak gor</summary>
+        <table id="data-table"><thead><tr><th>Saat</th><th class="num">°C</th><th class="num">Nem</th><th>Isitma</th></tr></thead><tbody></tbody></table>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Saatli senaryolar</h2>
+      <table id="rules"><thead><tr><th>Gunler</th><th class="num">Saat</th><th class="num">Hedef</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="empty hidden" id="rules-empty">Kural yok. Termostat yalniz hedef sicaklikla calisir.</div>
+      <details style="margin-top:12px">
+        <summary>Yeni kural ekle</summary>
+        <div class="grid2">
+          <div><label for="r-hour">Saat</label><input id="r-hour" type="number" min="0" max="23" value="17" inputmode="numeric"></div>
+          <div><label for="r-min">Dakika</label><input id="r-min" type="number" min="0" max="59" value="0" inputmode="numeric"></div>
+          <div><label for="r-target">Hedef °C</label><input id="r-target" type="number" min="5" max="30" step="0.5" value="22" inputmode="decimal"></div>
+        </div>
+        <div style="margin-top:12px">
+          <label>Gunler</label>
+          <div class="row" id="r-days"></div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="primary" id="r-add" type="button">Kurali ekle</button>
+        </div>
+        <div class="err hidden" id="r-err"></div>
+      </details>
+    </section>
+
+    <section class="card">
+      <details>
+        <summary>Ileri ayarlar</summary>
+        <div class="grid2" style="margin-top:12px">
+          <div><label for="s-band">Salinim bandi °C</label><input id="s-band" type="number" min="0.5" max="6" step="0.5"></div>
+          <div><label for="s-freeze">Donma esigi °C</label><input id="s-freeze" type="number" min="4" max="12" step="0.5"></div>
+          <div><label for="s-hold">Role asgari bekleme (sn)</label><input id="s-hold" type="number" min="0" max="1800" step="30"></div>
+          <div><label for="s-manual">Manuel mod (senaryolari durdur)</label>
+            <select id="s-manual"><option value="false">Kapali</option><option value="true">Acik</option></select></div>
+        </div>
+        <div class="row" style="margin-top:12px"><button class="primary" id="s-save" type="button">Ileri ayarlari kaydet</button></div>
+        <p class="note">Bant DHT11 sensorunun 1 °C cozunurlugune gore 3 °C secildi; sensor degisince daraltilabilir.</p>
+        <div class="err hidden" id="s-err"></div>
+      </details>
+    </section>
+
+    <div class="row" style="margin: 4px 0 32px">
+      <button id="signout" type="button">Cikis</button>
+      <span class="note" id="poll-note"></span>
+    </div>
+  </main>
+
+  <section class="card hidden" id="config-missing">
+    <h2>Yapilandirma eksik</h2>
+    <p class="sub">`dashboard/config.js` dosyasi yok ya da bos. `config.example.js`'i kopyalayip
+    Supabase adresi ve anon anahtarini girin.</p>
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js" onerror="document.getElementById('config-missing').classList.remove('hidden')"></script>
+<script src="app.js"></script>
+</body>
+</html>
