@@ -6,6 +6,33 @@ neden). Ayrıntılı ölçümler `docs/FAZ1-TEST-SONUCLARI.md`'de.
 
 ---
 
+## 15.10.2026 (01:00) — 🔌 FAZ 3 BAŞLADI: üretim yazılımı kartta
+
+Serhat Bey "fiziksel bağlantıya geçelim" dedi. Faz 3'ün **yazılım ayağı bitti**;
+kalan iş fiziksel ve iki ön koşula bağlı.
+
+**Yapılan ve ölçülen:** kart `esp32dev_prod` ile yeniden yüklendi.
+`SIM=0`, `sim temp 35` cihazda reddediliyor ve sıcaklığı değiştirmiyor
+(22.1 → 22.1), prod ikilisinde benzetim dizgeleri yok — **pozitif kontrol aynı
+eksende:** aynı ağaçtan derlenen dev ikilisinde `sim temp`/`sim fault`/`wdtest`
+dizgeleri **var** (2/2/1), prod'da **0**. Kurallar NVS'ten döndü (`rules=2`),
+WiFi + bulut geri geldi, açılışta röle boşta (`acilis_pad=HIGH heat=0`).
+
+**Ölçüm aletimde bir sapma:** `rules`/`wifi` alanlarını `info` çıktısında
+aradım, oysa onlar `STATE` satırında. İki kapı bu yüzden yanlışlıkla kırmızı
+yandı; doğru satırdan yeniden ölçünce 5/5 geçti. Kartta bir sorun yoktu.
+
+**Kontrol listesi:** `docs/FAZ3-KONTROL-LISTESI.md` — kombi başında telefondan
+takip edilecek adımlar, kabul ölçümleri ve geri dönüş yolu.
+
+**Kalan iki tıkayıcı (ikisi de Serhat Bey'de):**
+1. **10 kΩ pull-up** GPIO 23 – 3V3 arasına — takılmadan bağlantı yapılmaz.
+2. **S2 ölçümü** — RT–24V arası DC volt (~24 V beklenir) + klemens fotoğrafı
+   (köprü var mı). Klemens isimleri Kalisto kılavuzunda yok; bu ölçüm tek
+   doğrulama noktamız.
+
+---
+
 ## 15.10.2026 (gece) — ☁️ BULUT KURULDU + 🌐 YAYINDA
 
 Faz 1 bitti, Faz 2'nin yayın ayağı tamamlandı. **Panel internetten erişilebilir
@@ -16,7 +43,7 @@ ve telefondan çalıştığı ev ağı dışından doğrulandı.**
 | Panel | https://serhathome.netlify.app |
 | Depo | https://github.com/sevenexpressapp-create/serhathome (**public**) |
 | Supabase | `Termostat` / `hrxsqb…` — şema, RLS, `device-sync` yayında |
-| Kart | `kombi-fw 0.2.0-faz1`, **hâlâ SIM=1 geliştirme derlemesi** |
+| Kart | `kombi-fw 0.2.0-faz1` — o gece SIM=1 idi; **01:00'de prod yüklendi (SIM=0)** |
 
 ### Ne ölçüldü
 
@@ -57,6 +84,8 @@ ve telefondan çalıştığı ev ağı dışından doğrulandı.**
   → 3V3 arasına harici 10 kΩ pull-up (kodun çalışmadığı ~200 ms açılış
   penceresini yalnız o kapatır). Ayrıca `pio run -e esp32dev_prod` ile yeniden
   yüklenmeli; kart şu an SIM=1 geliştirme derlemesinde.
+  → **Bu kalemin yazılım ayağı 15.10 01:00'de kapandı** (prod yüklendi, SIM=0).
+  Güncel durum ve kalan ön koşullar en üstteki Faz 3 bölümünde.
 
 ---
 
