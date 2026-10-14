@@ -7,8 +7,8 @@ hicbir sey kanitlamiyor demektir (olu alet sinifi).
 
 Iki kol var:
   1. `pio test -e native` — 21 birim olcumu. Mutasyon DEPODAKI dosyaya
-     uygulanir, kosum biter, dosya `git checkout` ile GERI ALINIR ve temiz
-     oldugu ayrica dogrulanir.
+     uygulanir, kosum biter, dosyanin baytlari GERI YAZILIR (`try/finally` +
+     SIGINT/SIGTERM yakalama) ve temiz oldugu SHA-256 ile ayrica dogrulanir.
   2. `tests/sync_test.mjs` — gercek HTTP + gercek Edge Function. Burada depo
      dosyasina DOKUNULMAZ: cekirdek gecici bir dizine kopyalanir, orada
      bozulur, ayri bir `core_cli` derlenir ve test o ikiliyle kosar.
@@ -26,6 +26,7 @@ import hashlib
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -133,6 +134,30 @@ def main() -> int:
     # yazilir ve SHA-256 ile dogrulanir.
     original = {p: (p.read_bytes(), digest(p)) for p in (CPP, HDR)}
 
+    # KOSUM YARIDA KESILIRSE urun dosyasi MUTANT halde kalmasin (denetim 2. tur).
+    # Eski surum yalniz MUTLU YOLDA geri yaziyordu: Ctrl-C / SIGTERM / ajan olumu
+    # / `pio` yoklugu kosumu dusurdugunde `kombi_core.cpp` K1 kusuru GERI KONMUS
+    # halde kaliyordu. Iki onlem: (1) her mutant govdesi `finally` ile sarili,
+    # (2) SIGINT/SIGTERM yakalanip dosyalar geri yazildiktan sonra cikiliyor.
+    def restore_all():
+        for p, (raw, want) in original.items():
+            p.write_bytes(raw)
+            assert digest(p) == want, f"{p} geri alinamadi!"
+
+    # ⚠️ KALAN SINIR (olculdu): SIGKILL yakalanamaz, o durumda dosya mutant kalir.
+    # Ayrica kosum `pio` DERLERKEN kesilirse SCons imza veritabanini yazamaz;
+    # kaynak geri yazilsa bile `.pio/build/native` MUTANT ikiliyi tutabilir ve
+    # sonraki `pio test -e native` SAHTE KIRMIZI verir. Cozum: `pio run -t clean
+    # -e native`. (Kosum duzgun bitince bu olmuyor; olculdu.)
+    def on_signal(signum, _frame):
+        restore_all()
+        print(f"\nKESILDI (sinyal {signum}): urun dosyalari ORIJINAL haline geri yazildi.",
+              flush=True)
+        os._exit(130)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, on_signal)
+
     # Taban olcum: mutasyonsuz hal YESIL olmali, yoksa kirmizilar mutasyondan gelmez.
     base = run(["pio", "test", "-e", "native"], cwd=ROOT / "firmware")
     if base.returncode != 0:
@@ -144,26 +169,29 @@ def main() -> int:
     rows = []
     for name, path, find, repl, finding in MUTANTS:
         raw, want = original[path]
-        apply_mutation(path, find, repl)
-        # Mutasyonun GERCEKTEN uygulandigini olc (sessiz basarisizlik sinifi:
-        # desen tutmazsa mutant ikizi orijinalle ayni olur ve "yesil kaldi" yaniltir).
-        changed = digest(path) != want
-        if not changed:
+        # `finally`: kosum nasil dusse dusun (istisna, Ctrl-C, SIGTERM, `pio`
+        # yoklugu) urun dosyasi mutant halde BIRAKILMAZ.
+        try:
+            apply_mutation(path, find, repl)
+            # Mutasyonun GERCEKTEN uygulandigini olc (sessiz basarisizlik sinifi:
+            # desen tutmazsa mutant ikizi orijinalle ayni olur ve "yesil kaldi" yaniltir).
+            changed = digest(path) != want
+            if not changed:
+                rows.append((name, finding, "MUTASYON DOSYAYI DEGISTIRMEDI", False))
+                continue
+            res = run(["pio", "test", "-e", "native"], cwd=ROOT / "firmware")
+            failed_names = [
+                ln.split(":")[-1].split("[")[0].strip()
+                for ln in res.stdout.splitlines()
+                if "[FAILED]" in ln
+            ]
+            red = res.returncode != 0
+            rows.append((name, finding, ("KIRMIZI: " + ", ".join(failed_names[:3])) if red
+                         else "YESIL KALDI (olu alet!)", red))
+            print(f"{'KIRMIZI ' if red else 'SORUN   '} {name} -> {rows[-1][2]}")
+        finally:
             path.write_bytes(raw)
-            rows.append((name, finding, "MUTASYON DOSYAYI DEGISTIRMEDI", False))
-            continue
-        res = run(["pio", "test", "-e", "native"], cwd=ROOT / "firmware")
-        failed_names = [
-            ln.split(":")[-1].split("[")[0].strip()
-            for ln in res.stdout.splitlines()
-            if "[FAILED]" in ln
-        ]
-        path.write_bytes(raw)
-        assert digest(path) == want, f"{path} geri alinamadi!"
-        red = res.returncode != 0
-        rows.append((name, finding, ("KIRMIZI: " + ", ".join(failed_names[:3])) if red
-                     else "YESIL KALDI (olu alet!)", red))
-        print(f"{'KIRMIZI ' if red else 'SORUN   '} {name} -> {rows[-1][2]}")
+            assert digest(path) == want, f"{path} geri alinamadi!"
 
     # --- 2. kol: gercek HTTP ---
     http_rows = []

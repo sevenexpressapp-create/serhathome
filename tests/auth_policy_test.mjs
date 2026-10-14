@@ -1,15 +1,52 @@
 // YUKSEK-2 olcumu: signup kapali mi, parola politikasi uyguluyor mu?
+//
+// Calistirma:
+//   node tests/auth_policy_test.mjs                       # YEREL yigin (54321)
+//   SUPABASE_URL=https://<REF>.supabase.co ANON_KEY=<anon> SERVICE_KEY=<service> \
+//     node tests/auth_policy_test.mjs                     # BULUT projesi
+//
+// ⚠️ SAHTE YESIL TUZAGI (denetim 2. tur): bu dosya eskiden `process.env`i HIC
+// okumuyordu. docs/SUPABASE-KURULUM.md §7.5'teki bulut komutu kopyalanip
+// kosuldugunda bile hedef `supabase status`tan geliyor, yani YEREL yigin
+// olculuyor ve "5/5 gecti" basiliyordu — bulut projesinde kayit acik, parola 6
+// karakter olabilirken. Ortam degiskenleri artik hedefi EZIYOR (kardes testlerle
+// ayni kalip: rls_test / device_sync_test / sync_test) ve olcumun hangi hedefe
+// bagli oldugu ilk satirda BASILIYOR. Hedefe ulasilamazsa olcum sessizce yerele
+// DONMEZ, kirmiziya duser.
 import { execFileSync } from "node:child_process";
-const st = JSON.parse(execFileSync("npx", ["-y", "supabase@latest", "status", "-o", "json"],
-  { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-const U = st.API_URL, ANON = st.ANON_KEY, SERVICE = st.SERVICE_ROLE_KEY;
+
+function localStatus() {
+  const out = execFileSync("npx", ["-y", "supabase@latest", "status", "-o", "json"], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+  });
+  return JSON.parse(out);
+}
+const st = process.env.SUPABASE_URL ? null : localStatus();
+const U = process.env.SUPABASE_URL ?? st.API_URL;
+const ANON = process.env.ANON_KEY ?? st.ANON_KEY;
+const SERVICE = process.env.SERVICE_KEY ?? st.SERVICE_ROLE_KEY;
+if (!U || !ANON || !SERVICE) {
+  console.error("DUR: SUPABASE_URL verildiyse ANON_KEY ve SERVICE_KEY de gerekli " +
+    "(eksik anahtarla kosmak 'olcum' degildir).");
+  process.exit(2);
+}
+const yerel = /\/\/(127\.0\.0\.1|localhost)([:/]|$)/.test(U);
+console.log(`HEDEF: ${U} (${yerel ? "yerel" : "bulut"})` +
+  (process.env.SUPABASE_URL ? " — ortam degiskeninden" : " — ortam degiskeni yok, `supabase status`tan"));
+
 const results = [];
 const check = (n, p, d) => { results.push({n,p}); console.log(`${p?"GECTI ":"KALDI "} ${n}${d?" — "+d:""}`); };
 
 const post = async (path, body, key = ANON, bearer = null) => {
-  const r = await fetch(`${U}${path}`, { method: "POST",
-    headers: { apikey: key, Authorization: `Bearer ${bearer ?? key}`, "content-type": "application/json" },
-    body: JSON.stringify(body) });
+  let r;
+  try {
+    r = await fetch(`${U}${path}`, { method: "POST",
+      headers: { apikey: key, Authorization: `Bearer ${bearer ?? key}`, "content-type": "application/json" },
+      body: JSON.stringify(body) });
+  } catch (e) {
+    // Hedefe ULASILAMADI. Yerele geri donmek YOK: "durum=0" her olcumu dusurur.
+    return { status: 0, data: `AG HATASI (${U}): ${e?.cause?.code ?? e?.message ?? String(e)}` };
+  }
   let d = null; const t = await r.text(); if (t) { try { d = JSON.parse(t); } catch { d = t; } }
   return { status: r.status, data: d };
 };

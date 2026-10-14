@@ -215,6 +215,85 @@ await sleep(4000);
   check("D6b veritabaninda da degisti", Number(st[0]?.target_c) === Number(after), JSON.stringify(st));
 }
 
+// --- 5b) SEMA KISITI: "evde yokken 5-6 °C" yolu acik mi? -------------------
+// Sema kisiti: `freeze_guard_c <= target_c - 0.5`. Donma esigi 6,0 iken en
+// kucuk KAYDEDILEBILIR hedef 6,5 (yerel yiginda olculdu: 6,5 -> 204,
+// 6,0/5,5/5,0 -> 400 + 23514). Panel eskiden sayaci 5,0'a kadar aciyor, sonra
+// ham Ingilizce kisit metnini ekrana basiyordu; yol tikaliydi.
+//
+// ⚠️ Bu blok BILEREK bir 400 uretiyor; D11'in beklenen hata listesinde var.
+{
+  const basTarget = Number(await cdp.eval(`Number(settings.target_c)`));
+  const basFreeze = Number(await cdp.eval(`Number(settings.freeze_guard_c)`));
+
+  // (a) Sayac semanin ALTINA inmiyor ve sirasi Turkce anlatiliyor.
+  const a = JSON.parse(await cdp.eval(`(() => {
+    for (let i = 0; i < 60; i++) document.getElementById('t-minus').click();
+    return JSON.stringify({
+      sayac: document.getElementById('target-val').textContent,
+      taban: Number(settings.freeze_guard_c) + 0.5,
+      uyariGorunur: !document.getElementById('t-err').classList.contains('hidden'),
+      uyari: document.getElementById('t-err').textContent
+    });
+  })()`));
+  check(`D17 hedef sayacinin tabani donma esiginden turuyor (${basFreeze} -> ${basFreeze + 0.5}) ve sirasi anlatiliyor`,
+    Number(a.sayac) === a.taban && a.taban === basFreeze + 0.5 && a.uyariGorunur &&
+    /donma esigi/i.test(a.uyari) && !/violates|constraint|new row|Failing row/i.test(a.uyari),
+    JSON.stringify(a));
+
+  // (b) REDDEDILEN YOL: gercek PATCH -> gercek 23514. Sayac artik bu degeri
+  // uretemiyor; kisit yine de BILEREK ihlal ediliyor ki cevirinin KENDISI
+  // olculsun (cihaz ya da baska bir oturum donma esigini degistirirse bu yol
+  // hala kosar). Eksen: ham Postgres metni ekranda GORUNMEMELI.
+  await cdp.eval(`(() => { pendingTarget = ${basFreeze}; document.getElementById('t-save').click(); return true; })()`);
+  await sleep(2500);
+  const b = JSON.parse(await cdp.eval(`JSON.stringify({
+    gorunur: !document.getElementById('t-err').classList.contains('hidden'),
+    metin: document.getElementById('t-err').textContent,
+    dbTarget: null
+  })`));
+  check("D18 kisit hatasi (23514) TURKCE ve eyleme donuk; ham Postgres metni ekranda YOK",
+    b.gorunur && /donma esigi/i.test(b.metin) && /donma esigini dusur/i.test(b.metin) &&
+    !/violates|check constraint|new row|Failing row|device_settings_/i.test(b.metin),
+    JSON.stringify(b));
+
+  // (c) BASARILI YOL: donma esigi 5,0'a cekilince hedef 5,5 GERCEKTEN kaydediliyor.
+  await cdp.eval(`(() => {
+    document.getElementById('s-freeze').value = '5';
+    document.getElementById('s-save').click(); return true;
+  })()`);
+  await sleep(2500);
+  await cdp.eval(`(() => {
+    for (let i = 0; i < 60; i++) document.getElementById('t-minus').click();
+    document.getElementById('t-save').click(); return true;
+  })()`);
+  await sleep(2500);
+  const c = JSON.parse(await cdp.eval(`(async () => {
+    const r = await fetch(window.KOMBI_CONFIG.SUPABASE_URL + '/rest/v1/device_settings?select=target_c,freeze_guard_c', {
+      headers: { apikey: window.KOMBI_CONFIG.SUPABASE_ANON_KEY,
+                 Authorization: 'Bearer ' + JSON.parse(localStorage.getItem('kombi-auth')).access_token }});
+    const row = (await r.json())[0] || {};
+    return JSON.stringify({ db: row,
+      sayac: document.getElementById('target-val').textContent,
+      hataGorunur: !document.getElementById('t-err').classList.contains('hidden') });
+  })()`));
+  check("D19 donma esigi 5,0'a cekilince hedef 5,5 VERITABANINA yaziliyor (yol tikali degil)",
+    Number(c.db.target_c) === 5.5 && Number(c.db.freeze_guard_c) === 5 &&
+    Number(c.sayac) === 5.5 && c.hataGorunur === false, JSON.stringify(c));
+
+  // Kalan olcumler icin baslangic durumuna DON. Sira onemli: once hedef
+  // yukseltilir, sonra donma esigi — tersi ayni kisitla reddedilir.
+  await cdp.eval(`(() => { pendingTarget = ${basTarget}; document.getElementById('t-save').click(); return true; })()`);
+  await sleep(2000);
+  await cdp.eval(`(() => { document.getElementById('s-freeze').value = '${basFreeze}';
+    document.getElementById('s-save').click(); return true; })()`);
+  await sleep(2000);
+  const g = JSON.parse(await cdp.eval(`JSON.stringify({
+    t: Number(settings.target_c), f: Number(settings.freeze_guard_c) })`));
+  check("D20 olcum sonrasi baslangic durumu geri yuklendi (sonraki olcumler kirlenmedi)",
+    g.t === basTarget && g.f === basFreeze, `beklenen t=${basTarget} f=${basFreeze} / ${JSON.stringify(g)}`);
+}
+
 // --- 6) Kural listesi + cakisan kural reddi --------------------------------
 {
   const v = await cdp.eval(`JSON.stringify({
@@ -424,11 +503,13 @@ await sleep(4500);
   // Beklenenler:
   //  · favicon (sunucuda yok)
   //  · D8'de BILEREK eklenen cakisan kural -> 409
+  //  · D18'de BILEREK ihlal edilen hedef/donma esigi kisiti -> 400
   //  · D14/D16'da BILEREK kesilen/duraklatilan REST istekleri (enjeksiyon
   //    noktasindan SONRA ve yalniz ag hatasi olarak)
   const beklenen = (r) =>
     /favicon/i.test(r.url) ||
     (/409/.test(r.text) && /scenario_rules/.test(r.url)) ||
+    (/400/.test(r.text) && /device_settings/.test(r.url)) ||
     (r.i >= enjeksiyonBasi && /ERR_FAILED|ERR_ABORTED|ERR_CONNECTION/.test(r.text) && /rest\/v1/.test(r.url));
   const errs = raw.filter((r) => !beklenen(r));
   check("D11 konsolda beklenmeyen hata yok (enjekte edilen hatalar ayri sayildi)", errs.length === 0,

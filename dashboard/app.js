@@ -255,6 +255,52 @@ function fmtAge(s) {
   return Math.round(s / 3600) + " saat";
 }
 
+// --- hedefin alt siniri SEMA KISITINDAN turer -------------------------------
+// Sema: `freeze_guard_c <= target_c - 0.5` (device_settings_freeze_below_target).
+// Yani donma esigi 6,0 iken en kucuk KAYDEDILEBILIR hedef 6,5'tir; 6,0 ve alti
+// 23514 ile reddedilir (yerel yiginda olculdu: 6,5 -> 204, 6,0/5,5/5,0 -> 400).
+// Sayac eskiden sabit 5 °C'ye kadar iniyordu, yani veritabaninin ASLA
+// kaydedemeyecegi bir hedef sunuyor ve ham Ingilizce kisit metnini ekrana
+// basiyordu. "Evde yokken 5-6 °C'ye dusur" senaryosu bu yuzden tikaliydi.
+const KISIT_PAYI_C = 0.5;      // sema: freeze_guard_c <= target_c - 0.5
+const HEDEF_TAVAN_C = 30;      // sema: target_c <= 30
+const HEDEF_SEMA_TABAN_C = 5;  // sema: target_c >= 5
+
+const vir = (n) => Number(n).toFixed(1).replace(".", ",");   // 6 -> "6,0"
+
+// YURURLUKTEKI (kaydedilmis) donma esigine gore alt sinir. Panelde henuz
+// kaydedilmemis bir donma esigi varsa O KULLANILMAZ: sayac yine veritabaninin
+// reddedecegi bir yere acilmis olurdu.
+function enAzHedefC(s = settings) {
+  const f = s === null || s === undefined ? NaN : Number(s.freeze_guard_c);
+  if (!Number.isFinite(f)) return HEDEF_SEMA_TABAN_C;
+  return Math.max(HEDEF_SEMA_TABAN_C, f + KISIT_PAYI_C);
+}
+
+// Postgres kisit hatasini (23514) kullaniciya DONUK bir cumleye cevirir. Ham
+// Ingilizce govde ('new row for relation "device_settings" violates check
+// constraint ...' + 'Failing row contains (...)') kullaniciya GOSTERILMEZ.
+function kisitMetni(error, hangi) {
+  const ham = `${error?.code ?? ""} ${error?.message ?? ""} ${error?.details ?? ""}`;
+  if (/freeze_below_target/.test(ham)) {
+    const f = settings === null ? NaN : Number(settings.freeze_guard_c);
+    const t = settings === null ? NaN : Number(settings.target_c);
+    if (hangi === "hedef") {
+      return "Kaydedilemedi. Donma esigi" + (Number.isFinite(f) ? ` (${vir(f)} °C)` : "") +
+        " hedefin en az 0,5 °C altinda kalmali" +
+        (Number.isFinite(f) ? `, yani hedef en az ${vir(f + KISIT_PAYI_C)} °C olabilir` : "") +
+        ". Daha dusuk bir hedef icin once asagidaki ayarlardan donma esigini dusurup kaydedin.";
+    }
+    return "Kaydedilemedi. Donma esigi, hedefin" + (Number.isFinite(t) ? ` (${vir(t)} °C)` : "") +
+      " en az 0,5 °C altinda kalmali" +
+      (Number.isFinite(t) ? `, yani en fazla ${vir(t - KISIT_PAYI_C)} °C girebilirsiniz` : "") + ".";
+  }
+  if (error?.code === "23514") {
+    return "Kaydedilemedi: girilen deger izin verilen araligin disinda. Degeri kontrol edip tekrar deneyin.";
+  }
+  return "Kaydedilemedi: " + (error?.message ?? "bilinmeyen hata");
+}
+
 function renderSettings(s) {
   if (!s) {
     // Ayar satiri henuz yok (cihaz hic konusmadi): bos goster, tahmin uretme.
@@ -263,6 +309,9 @@ function renderSettings(s) {
     return;
   }
   if (pendingTarget === null) pendingTarget = Number(s.target_c);
+  // Donma esigi degisince hedefin alt siniri DA degisir: bekleyen deger
+  // kaydedilemez bir yerde kalmasin.
+  pendingTarget = Math.min(HEDEF_TAVAN_C, Math.max(enAzHedefC(s), pendingTarget));
   $("target-val").textContent = pendingTarget.toFixed(1);
   $("s-band").value = Number(s.hysteresis_c);
   $("s-freeze").value = Number(s.freeze_guard_c);
@@ -274,8 +323,18 @@ $("t-minus").addEventListener("click", () => bumpTarget(-0.5));
 $("t-plus").addEventListener("click", () => bumpTarget(0.5));
 function bumpTarget(d) {
   if (pendingTarget === null) return;
-  pendingTarget = Math.min(30, Math.max(5, Math.round((pendingTarget + d) * 2) / 2));
+  const lo = enAzHedefC();
+  pendingTarget = Math.min(HEDEF_TAVAN_C, Math.max(lo, Math.round((pendingTarget + d) * 2) / 2));
   $("target-val").textContent = pendingTarget.toFixed(1);
+  // Alt sinira dayanildiysa yol TIKALI degil: sirasi anlatilir.
+  if (d < 0 && pendingTarget <= lo && lo > HEDEF_SEMA_TABAN_C) {
+    $("t-err").textContent =
+      `Donma esigi ${vir(settings.freeze_guard_c)} °C oldugu icin hedef en az ${vir(lo)} °C olabilir. ` +
+      "Daha dusuk bir hedef icin once asagidaki ayarlardan donma esigini dusurup kaydedin.";
+    show($("t-err"), true);
+  } else {
+    show($("t-err"), false);
+  }
 }
 $("t-save").addEventListener("click", async () => {
   show($("t-err"), false);
@@ -287,7 +346,7 @@ $("t-save").addEventListener("click", async () => {
   const { error } = await sb.from("device_settings")
     .update({ target_c: pendingTarget, updated_at: new Date().toISOString() })
     .eq("device_id", device.id);
-  if (error) { $("t-err").textContent = "Kaydedilemedi: " + error.message; show($("t-err"), true); return; }
+  if (error) { $("t-err").textContent = kisitMetni(error, "hedef"); show($("t-err"), true); return; }
   refresh();
 });
 
@@ -300,7 +359,7 @@ $("s-save").addEventListener("click", async () => {
     manual_mode: $("s-manual").value === "true",
     updated_at: new Date().toISOString(),
   }).eq("device_id", device.id);
-  if (error) { $("s-err").textContent = "Kaydedilemedi: " + error.message; show($("s-err"), true); return; }
+  if (error) { $("s-err").textContent = kisitMetni(error, "ayar"); show($("s-err"), true); return; }
   refresh();
 });
 

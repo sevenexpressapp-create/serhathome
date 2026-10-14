@@ -6,6 +6,49 @@ neden). Ayrıntılı ölçümler `docs/FAZ1-TEST-SONUCLARI.md`'de.
 
 ---
 
+## 14.10.2026 (gece) — 2. tur denetimin üç düzeltmesi
+
+Kapsam yalnız üç maddeydi; yeni özellik eklenmedi.
+
+1. **`tests/auth_policy_test.mjs` ortam değişkenlerini yok sayıyordu** (en
+   riskli bulgu). Dosyada `process.env` hiç geçmiyordu: `docs/SUPABASE-KURULUM.md`
+   §7.5'teki **bulut** komutu kopyalanıp koşulsa bile hedef `supabase status`'tan
+   geliyor, yani **yerel** yığın ölçülüyor ve "5/5 geçti" basılıyordu. Artık
+   `SUPABASE_URL` / `ANON_KEY` / `SERVICE_KEY` hedefi eziyor (kardeş testlerle
+   aynı kalıp), **hedef ilk satırda basılıyor** (`HEDEF: … (yerel|bulut)`) ve
+   hedefe ulaşılamazsa koşum sessizce yerele dönmeyip kırmızı düşüyor.
+2. **Panel, veritabanının kaydetmesi imkânsız bir hedef sunuyordu.** Hedef
+   sayacının alt sınırı artık sabit 5 değil, yürürlükteki donma eşiğinden türüyor
+   (`freeze + 0,5`); donma eşiği kaydedilince sınır güncelleniyor. `23514` kısıt
+   hatası Türkçe ve eyleme dönük bir cümleye çevrildi (ham Postgres metni artık
+   ekrana basılmıyor). "Donma eşiğini 5'e çek, hedefi 5,5 yap" yolu **ölçüldü:
+   gerçekten kaydediliyor.**
+3. **`tests/negatif_kontrol.py` yarıda kesilirse ürün kodunu bozuk bırakıyordu.**
+   Mutant gövdesi `try/finally` içine alındı, SIGINT/SIGTERM yakalanıyor ve
+   dosyalar geri yazılıp SHA-256 ile doğrulanıyor. Kalan sınır: **SIGKILL
+   yakalanamaz** (ölçüldü, dosyada yazılı).
+
+**Ölçümler:** `auth_policy` 5/5 (negatif kontrol: ulaşılamayan adres → 0/5),
+`panel_test` **21/21** (4 yeni ölçüm; mutasyonla doğrulandı), `negatif_kontrol
+--native` 8/8 kırmızı, `pio test -e native` 21/21, `rls_test` 28/28 (mutasyon
+bayrağı verilmedi). Hepsi **yalnız yerel yığına** (54321) karşı koştu.
+
+⚠️ **Bu tur sırasında `dashboard/config.js` ve `firmware/include/config.h`
+bulut projesine çevrildi (Patron, 23:38; yanlarında tarihli yedekleri var) ve
+`firmware/src/ca_cert.cpp` + `firmware/src/cloud.h` değişti.** Panel ölçümleri
+bu yüzden depodaki `config.js` yerine karalama dizinindeki **yerel** bir
+`config.js` ile koştu; bulut projesine tek istek gitmedi (CSP `connect-src`
+yalnız 127.0.0.1'e izin veriyordu, ara denemede istek tarayıcıda bloklandı).
+Bu dört dosya **commit edilmedi** — Patron'un süren işi.
+
+⚠️ **Ölçüm tuzağı (yeni):** `negatif_kontrol.py` `pio` **derlerken** kesilirse
+SCons imza veritabanını yazamıyor; kaynak geri yazılsa bile
+`firmware/.pio/build/native` mutant ikiliyi tutuyor ve sonraki
+`pio test -e native` **sahte kırmızı** veriyor (bir kez yaşandı: 2 test "kırmızı"
+sandık, kaynak temizdi). Çözüm: `pio run -t clean -e native`.
+
+---
+
 ## 14.10.2026 (akşam) — denetim düzeltme turu (2. tur denetime hazır)
 
 **Bağlam:** Faz 1 masa üstü prototipi kod + güvenlik denetiminden **BLOK** aldı
@@ -47,7 +90,7 @@ koştu, bu yüzden en kritik iki kusur kaçtı.
 | `tests/rls_test.mjs` | **34/34** (5 ölçüm boşluğu kapatıldı) | — |
 | `tests/device_sync_test.mjs` | **16/16** | — |
 | `tests/auth_policy_test.mjs` | **5/5** | — |
-| `tests/panel_test.mjs` (gerçek CSP başlıklarıyla) | **17/17** | — |
+| `tests/panel_test.mjs` (gerçek CSP başlıklarıyla) | **21/21** (14.10 gecesi 17→21) | — |
 
 ### 🔴 Açık / bekleyen
 
