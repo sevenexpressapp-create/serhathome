@@ -25,7 +25,9 @@
 #include "config.h"
 #include "kombi_core.h"
 
-extern const char* ISRG_ROOT_X1_PEM;
+// Guven capasi: iki kok sertifika (GTS Root R4 + GlobalSign). Olcum ve
+// gerekce ca_cert.cpp basinda; kok, baglanilacak ana makineye olculur.
+extern const char* SUPABASE_CA_BUNDLE_PEM;
 
 struct DeviceReport {
   bool has_reading;   // false => temp/humidity NULL gider (uydurma 0.0 yok)
@@ -118,7 +120,7 @@ class Cloud {
 #if ALLOW_INSECURE_TLS
     client.setInsecure();  // yalniz hata ayiklama; uretimde 0 olmali
 #else
-    client.setCACert(ISRG_ROOT_X1_PEM);
+    client.setCACert(SUPABASE_CA_BUNDLE_PEM);
 #endif
     client.setTimeout(10);
 
