@@ -6,6 +6,59 @@ neden). Ayrıntılı ölçümler `docs/FAZ1-TEST-SONUCLARI.md`'de.
 
 ---
 
+## 15.10.2026 (02:45) — 🔥 FAZ 3 BİTTİ: KOMBİ BAĞLANDI VE ÇALIŞIYOR
+
+Serhat Bey kartı kombiye bağladı. **Kabul ölçümlerinin beşi de geçti.**
+Sistem artık gerçek: panelden verilen hedef kombiyi yakıyor ve söndürüyor.
+
+| # | Ölçüm | Sonuç |
+|---|---|---|
+| D1 | Panelden hedef 25 → kombi yandı | ✅ röle 22:34'te çekti |
+| D2 | Asgari bekleme (300 s) | ✅ `reason=min_hold`, 22:38:55'te bıraktı — ~300 s, tam zamanında |
+| D3 | Hedef 20 → kombi söndü | ✅ `reason` → `above_band` |
+| D4 | ESP32'nin fişi çekildi | ✅ röle bıraktı, kombi ısı talebi görmedi (Serhat Bey, kombi başında) |
+| D5 | Fiş geri takıldı | ✅ `uptime_s=40`, `relay_on=False`, `rule_active=True` (23:00), `time_valid=True` |
+
+D1–D3 **buluttan bağımsız olarak** ölçüldü (`device_state` + `telemetry`),
+D4'ün aleti Serhat Bey'in kombi başındaki gözlemi — kart o sırada kapalı
+olduğu için bulut tarafı zaten kördür.
+
+**Yerleşim:** kart mutfakta, kombiden 1 m. Gerekçe ve bilinçli ödünç
+`docs/FAZ3-KONTROL-LISTESI.md` §B3'te.
+
+### ⚠️ Kapanmadan bırakılan: S2'nin gerilim ayağı
+
+**Bağlantı multimetre ölçümü YAPILMADAN kuruldu.** Bunu açıkça yazıyorum ki
+ileride "ölçtük" sanılmasın. Klemensin termostat girişi olduğu Serhat Bey'in
+birinci elden bilgisiyle sabitti; **ne gerilim taşıdığı ölçülmedi.**
+
+Sistemin çalışıyor olması bunu kapatmaz — röle kuru kontak, 24 V de 230 V da
+anahtarlar. Açık kalan şey **dokunma emniyeti**:
+
+> 🔴 **Kombi enerjiliyken rölenin vidalı klemensine ve ona giden iki damarlı
+> kabloya dokunulmaz.** Multimetre alınınca ölçülüp bu kayıt kapatılmalı.
+
+### 👀 İzlenecek: sensör mutfakta ne kadar sapıyor
+
+Kombi ~5 dakika çalıştı, mutfak **22,5 → 23,5 °C** çıktı (telemetri, monoton
+artış). Yani sensör ısı kaynağına yakın olduğu için hızlı doyuyor. Beklenen
+etki, karar verilmişti — ama birkaç gün izlenmeli: panel 23 derken ev soğuk
+geliyorsa sorun kombide değil **kartın durduğu yerdedir**, kart odaya taşınır.
+Röle kuru kontak olduğu için taşıma 10 dakikalık iş.
+
+### Kalan açıklar (sıralı)
+
+1. **Giriş ekranı korumasız** — panel internette, tek koruma parola.
+   Captcha + MFA yok. En üstteki iş.
+2. **S2 gerilim ölçümü** — yukarıdaki dokunma emniyeti kaydı.
+3. **10 kΩ pull-up** — önerilir, tıkayıcı değil (§B1).
+4. **Köprü teli saklandı mı** — geri dönüş yolu; teyit bekleniyor.
+5. **Hafta sonu ısınma** — `17:00 → 25` yalnız hafta içi.
+6. **Sabah kuralı yok** — gece 23:00 → 20 var, sabah yükselten kural yok.
+7. `events` üreticisiz · manuel kip yeniden başlatmada kayboluyor.
+
+---
+
 ## 15.10.2026 (01:00) — 🔌 FAZ 3 BAŞLADI: üretim yazılımı kartta
 
 Serhat Bey "fiziksel bağlantıya geçelim" dedi. Faz 3'ün **yazılım ayağı bitti**;
