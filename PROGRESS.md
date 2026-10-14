@@ -25,11 +25,32 @@ yandı; doğru satırdan yeniden ölçünce 5/5 geçti. Kartta bir sorun yoktu.
 **Kontrol listesi:** `docs/FAZ3-KONTROL-LISTESI.md` — kombi başında telefondan
 takip edilecek adımlar, kabul ölçümleri ve geri dönüş yolu.
 
-**Kalan iki tıkayıcı (ikisi de Serhat Bey'de):**
+**Kalan tıkayıcılar:**
 1. **10 kΩ pull-up** GPIO 23 – 3V3 arasına — takılmadan bağlantı yapılmaz.
-2. **S2 ölçümü** — RT–24V arası DC volt (~24 V beklenir) + klemens fotoğrafı
-   (köprü var mı). Klemens isimleri Kalisto kılavuzunda yok; bu ölçüm tek
-   doğrulama noktamız.
+   Kartta var mı belirsiz: üst yüzde DHT11'in yanında dik duran tek direnç var,
+   konumu onun **sensör pull-up'ı** olduğunu düşündürüyor (GPIO 18), lehim
+   yüzünde yalnız beyaz atlama telleri görünüyor. Belirsizliği kapatmanın ucuz
+   yolu ölçmek değil **takmak**: ikinci bir 10 kΩ paralel gelirse 5 kΩ olur,
+   pin LOW'da 0,66 mA çeker — zararsız.
+2. **S2'nin gerilim ayağı** — klemens bulundu (aşağı bak), kalan tek şey
+   DC volt ölçümü (~24 V beklenir).
+3. **Kart/sensör nereye** — yeni çıkan kalem (aşağı bak).
+
+**Klemens 01:40'ta bulundu (S2'nin yarısı kapandı).** Mavi 2×2 dört vidalı
+klemens, kombinin kontrol kutusunun kenarında. Termostat girişi olduğu
+**etiketle değil** Serhat Bey'in birinci elden bilgisiyle sabit ("eminim, daha
+önce buraya bağladık"); okunabilir `RT`/`24V`/`GND` yazısı yok, yalnız kabartma
+bir şema simgesi var. **Köprü VAR** — termostat söküldüğü için ön sıradaki iki
+terminal telle köprülenmiş, kombi şu an sürekli ısı talebinde. Kablolar
+kombinin **içine** gidiyor, duvara çıkan termostat kablosu yok.
+
+**Bunun doğurduğu yeni kalem:** bağlantı noktası kombinin dibinde, ama DHT11
+aynı perfboard'da ve kombinin dibindeki sıcaklık odanın sıcaklığı değil. Röle
+kuru kontak olduğu için uzatılabilir: klemensten odaya 2×0,75 mm² kablo çekilip
+kart odada durmalı. Yer ve kablo uzunluğu Serhat Bey'den bekleniyor (plandaki
+S6 sorusu).
+
+**Alınacaklar:** 10 kΩ direnç · havya + lehim · multimetre · 2×0,75 mm² kablo.
 
 ---
 

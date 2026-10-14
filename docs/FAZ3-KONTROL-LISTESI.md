@@ -52,12 +52,48 @@ Kartın USB'si eline geçen biri artık röleyi benzetim komutuyla süremez.
 2. Röle çekiliyken reset'e basıldığında seri porta yine
    `ACILIS: role pini GPIO 23, kod oncesi seviye=HIGH` satırı düşmeli.
 
-### B2. 🔴 S2 ölçümü — kombinin klemensi (hâlâ açık soru)
+### B2. 🟡 S2 — klemens BULUNDU, gerilim hâlâ ölçülmedi
 
-Klemens isimleri (**RT / 24V / GND**) Kalisto kılavuzunda **yok**; o kılavuz
-bu bilgiyi bilinçli olarak yetkili servise bırakmış. Elimizdeki bilgi
-Demirdöküm **RF 6001/2** kılavuzundan ve senin "eski termostat COM+NO bağlıydı"
-beyanından geliyor. **Tek doğrulama noktamız bu ölçüm.**
+**15.10.2026 01:40 — fotoğrafla ve Serhat Bey'in beyanıyla kapanan kısım:**
+
+- Kombinin kontrol kutusunun kenarında **mavi, 2×2 dört vidalı** klemens var.
+- **Burası termostat girişi.** Kanıt bir etiket değil, Serhat Bey'in birinci
+  elden bilgisi: *"eminim, daha önce buraya bağladık."* Klemens üzerinde
+  okunabilir `RT`/`24V`/`GND` yazısı **yok** — gri plastikte yalnız kabartma
+  bir şema simgesi var. Yani isimleri hâlâ RF 6001 kılavuzundan varsayıyoruz;
+  **hangi uçlar** olduğu artık belli, **ne taşıdıkları** değil.
+- **Köprü VAR ve sebebi belli:** termostat söküldüğü için klemensin **ön
+  sırasındaki** iki terminal kısa bir telle köprülenmiş. Kombi bu yüzden şu an
+  sürekli ısı talebinde. Bu köprü C2'de çıkarılacak, bizim röle onun yerine
+  girecek.
+- **Kablolar kombinin içine gidiyor** — duvara çıkan bir termostat kablosu
+  yok. Bağlantı noktası kombinin dibinde (bkz. aşağıdaki not).
+
+**Kalan tek şey gerilim:** kombi çalışırken, köprü sökülüyken ve uçlar boşta /
+birbirine değmiyorken multimetre **DC Volt** kademesinde iki ön terminal arası.
+**Beklenen ~24 V DC.**
+
+🛑 **DUR koşulu:** Beklenenden çok farklı bir değer çıkarsa — özellikle AC
+kademesinde yüksek gerilim görürsen — bağlantı yapma, değeri bildir. Röle
+kontağı 250 V AC'ye dayanır ama perfboard, ince montaj teli ve açıktaki kart
+şebeke gerilimi için uygun değil. Plan o veriye göre düzeltilir.
+
+### B3. 🟡 Kart nerede duracak — sensör kombinin dibinde OLAMAZ
+
+Kablolar içeri gittiği için bağlantı noktası kombinin yanında. Ama DHT11 aynı
+perfboard'un üzerinde ve **kombinin dibindeki sıcaklık odanın sıcaklığı
+değildir** — kazan/dolap sıcaklığını ölçer, termostat da ona göre yanlış karar
+verir.
+
+Çözüm: röle **kuru kontak**, yani uzatılması serbest. Klemensten karta
+2 damarlı kablo çekilir (kılavuz s.11 §2.5: 20 m'ye kadar **2×0,75 mm²**,
+daha uzunsa 2×1 mm², beyaz), kart ve sensör odada durur.
+
+Kartın yeri: oturma odası / salon / hol duvarı, **yerden ~1,5 m**, güneşten,
+kombiden, radyatörden ve hava akımından uzak; yakınında **priz** olmalı
+(ESP32 ayrı 5 V adaptörle beslenecek).
+
+**Açık:** yer seçimi ve kablo uzunluğu Serhat Bey'den bekleniyor.
 
 Kombi **çalışır durumdayken**, termostat uçları boşta ve birbirine değmiyorken:
 
@@ -74,7 +110,8 @@ veriye göre düzeltilir.
 ## C. Bağlantı adımları
 
 1. **Kombinin elektriğini tamamen kes** — fiş *ve* sigorta. Ekranın söndüğünü gör.
-2. **Köprüyü çıkar.** RT–24V arasında köprü teli varsa sökülür; takılı kalırsa
+2. **Köprüyü çıkar.** Köprü **var** (15.10 fotoğrafı, klemensin ön sırası);
+   takılı kalırsa
    kombi sürekli ısı talebinde kalır ve röle hiçbir şeyi kontrol edemez.
    - Çıkan teli **bantla, etiketle, klemens kutusunun yanında sakla.**
    - Köprü yoksa kısa bir tel hazırlayıp oraya koy. **Geri dönüş yolun bu:**
