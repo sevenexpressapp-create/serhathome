@@ -1,6 +1,15 @@
 # --- SIRLAR (asla depoya girmez) ---
+# DIKKAT: joker SART. 15.10.2026'da yayin oncesi olculdu — kurulum betigi
+# `config.h.yedek-20261014-233829` birakmisti ve tam-ad kurali onu TUTMUYORDU;
+# icinde WiFi SSID ve DEVICE_SECRET vardi, `git add -A` ile gidecekti.
+# `config.example.h` / `config.example.js` baska adlar, etkilenmez.
 firmware/include/config.h
+firmware/include/config.h.*
 dashboard/config.js
+dashboard/config.js.*
+*.yedek-*
+*.backup
+*.bak
 supabase/.env
 supabase/.env.local
 .env
