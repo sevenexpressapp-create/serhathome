@@ -6,6 +6,60 @@ neden). Ayrıntılı ölçümler `docs/FAZ1-TEST-SONUCLARI.md`'de.
 
 ---
 
+## 15.10.2026 (gece) — ☁️ BULUT KURULDU + 🌐 YAYINDA
+
+Faz 1 bitti, Faz 2'nin yayın ayağı tamamlandı. **Panel internetten erişilebilir
+ve telefondan çalıştığı ev ağı dışından doğrulandı.**
+
+| | |
+|---|---|
+| Panel | https://serhathome.netlify.app |
+| Depo | https://github.com/sevenexpressapp-create/serhathome (**public**) |
+| Supabase | `Termostat` / `hrxsqb…` — şema, RLS, `device-sync` yayında |
+| Kart | `kombi-fw 0.2.0-faz1`, **hâlâ SIM=1 geliştirme derlemesi** |
+
+### Ne ölçüldü
+
+- **Yetki politikası buluta karşı 5/5** (`tests/auth_policy_test.mjs`). Çıktının
+  ilk satırı `(bulut)` diyor — eski sahte yeşil tuzağına düşülmedi. Testin
+  yarattığı hesaplar sonradan silindi ve silindiği doğrulandı.
+- **Panel → bulut → kart zinciri iki uçtan kanıtlandı.** Panelden girilen
+  `17:00 → 25` ve `23:00 → 20` kuralları kartta `rule list` ile görüldü; karta
+  kural girmenin tek diğer yolu (seri port) kullanılmadı.
+- **Asgari röle tutma gerçek donanımda doğrulandı**: kural değişince hedef
+  düştü ama röle 300 sn dolana kadar açık kaldı, `up=1878s`'de bıraktı.
+- **Yayındaki yanıt dışarıdan ölçüldü, 13/13.** CSP gerçekten daraltılmış
+  geliyor; derleme kütüğünün beyanıyla yetinilmedi.
+
+### Bu turda kapatılan iki gerçek kusur
+
+1. **Sır yedeği gönderilmek üzereydi.** `.gitignore` tam dosya adı yazıyordu;
+   kurulum betiğinin bıraktığı `config.h.yedek-<tarih>` kuralı atlıyordu ve
+   içinde WiFi SSID + `DEVICE_SECRET` vardı. Joker kurala çevrildi.
+2. **CSP kapısı yorum yüzünden hep kırmızıydı.** Kapı jokeri dosyanın tamamında
+   arıyordu, `_headers`'ın yorum bloğu ise jokeri açıklama amaçlı taşıyordu.
+   Kapı yalnız yürürlükteki CSP satırına bakar hâle getirildi; mutasyon testiyle
+   hâlâ kırmızı verebildiği doğrulandı.
+
+### 🔴 Açık / bekleyen
+
+- **Giriş ekranı korumasız.** Panel internette; girişi koruyan tek şey parola.
+  Deneme sınırı yok, **captcha yok, MFA yok**. Sunucu tarafını giriş ekranı
+  hazır olmadan sertleştirmek kilitlenme üretir — ikisi birlikte yapılmalı:
+  hCaptcha bileşeni + `captchaToken`, TOTP alanı, sonra Supabase'de açma,
+  sonra iki yönlü ölçüm. **Artık ertelenebilir bir süs değil.**
+- **Hafta sonu ısınma davranışı**: `17:00 → 25` yalnız hafta içi seçili.
+  Cumartesi/Pazar geriye bakınca Cuma gecesinin `20`'sini bulur, yani hafta
+  sonu hiç 25'e çıkmaz. Kasıtlıysa sorun yok; değilse maske tüm günler olmalı.
+- **`events` tablosunun üreticisi yok** — Faz 2 alarmlarının veri kaynağı yok.
+- **Manuel kip yeniden başlatmada kayboluyor** (bilinçli ödünç, belgeli).
+- **Faz 3 — kombiye fiziksel bağlantı: AYRI ONAY.** Tıkayıcı ön koşul: GPIO 23
+  → 3V3 arasına harici 10 kΩ pull-up (kodun çalışmadığı ~200 ms açılış
+  penceresini yalnız o kapatır). Ayrıca `pio run -e esp32dev_prod` ile yeniden
+  yüklenmeli; kart şu an SIM=1 geliştirme derlemesinde.
+
+---
+
 ## 14.10.2026 (gece) — 2. tur denetimin üç düzeltmesi
 
 Kapsam yalnız üç maddeydi; yeni özellik eklenmedi.
