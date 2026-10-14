@@ -19,6 +19,20 @@
   publish = "dashboard"
   command = "bash tools/netlify-build.sh"
 
+# Netlify'ın sır taraması, bir ortam değişkeninin değerini yayın çıktısında
+# bulursa derlemeyi düşürür. Bu iki değişken çıktıda BİLEREK yer alıyor:
+# panelin tarayıcıda çalışması için `config.js` içine yazılmaları gerekiyor.
+#
+# İkisi de sır DEĞİL: proje adresi herkese açık, anon anahtar ise zaten
+# "publishable" — veriyi RLS koruyor. Gerçek sır olan service_role anahtarı
+# Netlify'a hiç girmez; netlify-build.sh anon alanına service_role konursa
+# derlemeyi kasten düşürür.
+#
+# Bu yüzden Netlify arayüzünde ikisi de "Contains secret values" olarak
+# İŞARETLENMEZ. İşaretlenirse derleme her seferinde düşer.
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_URL,SUPABASE_ANON_KEY"
+
 # Tek sayfalık panel: bilinmeyen yollar index.html'e döner.
 [[redirects]]
   from = "/*"
