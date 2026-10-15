@@ -6,6 +6,55 @@ neden). Ayrıntılı ölçümler `docs/FAZ1-TEST-SONUCLARI.md`'de.
 
 ---
 
+## 15.10.2026 (03:00) — ⏸️ TUR KAPANDI: ikinci test doğruladı, buradan devam
+
+Serhat Bey bağlantıdan sonra **ikinci bir test** yaptı. Faz 3'ün D1–D3
+ölçümleri **bağımsız bir koşumda tekrarlandı** — yani ilk sonuç tesadüf değil.
+
+| Saat (veritabanı) | Olan |
+|---|---|
+| 22:47:24 | Hedef 25 yazıldı → röle **çekti** (oda 23,1; yakma eşiği `25 − 1,5` = 23,5) |
+| 22:47:40 | Hedef 20'ye geri alındı |
+| 22:48 – 22:51 | Röle çekili kaldı — `reason=min_hold` |
+| **22:52:25** | Röle **bıraktı**, `reason=above_band` |
+
+Çekişten bırakışa **301 saniye**; `min_relay_hold_s = 300`. İlk testte de
+~300 s ölçülmüştü. **İki bağımsız koşumda aynı sonuç → gecikme tasarlandığı
+gibi çalışıyor, ölçüm tekrarlanabilir.**
+
+Kart bu süre boyunca **hiç yeniden başlamadı** (`uptime_s = 700`), yani
+kombiye bağlı hâlde WiFi + bulut döngüsü stabil.
+
+**Kullanıcı tarafındaki tek kural:** hedefi düşürdüğün andan itibaren kombinin
+sönmesi **5 dakika** sürer. Kısaltılabilir ama kısaltılmamalı — brülörü sık
+aç-kapadan koruyan şey bu.
+
+### 🔍 Açıklanmamış gözlem: `rule_active` döndü
+
+İki okuma arasında `rule_active` **True (kural 23) → False (kural None)**
+oldu. **Davranışa etkisi yok:** taban hedef 20, `23:00 → 20` kuralı da 20
+veriyor; yürürlükteki hedef iki hâlde de 20. Ama *neden* döndüğünü
+**bilmiyoruz** — bunu bir sonraki tura açık kalem olarak bırakıyorum,
+çözülmüş gibi yazmıyorum. Bakılacak yer: `kombi_core` kural seçimi + NTP
+saatinin gün/saat penceresine düşme anı.
+
+### ▶️ Bir sonraki tur buradan başlasın
+
+1. **Üç commit yerelde** — `8a5a9c5`, `ab819ef`, `79969b6` gönderilmedi.
+   Serhat Bey kendi çalıştırır: `git push origin main`
+2. **Giriş ekranı captcha + MFA** (en üstteki iş). Sıra önemli: önce
+   `dashboard/app.js` girişine (≈80-83. satır) hCaptcha bileşeni +
+   `options: { captchaToken }` ve TOTP alanı → *sonra* Supabase'de sunucu
+   tarafı açılır → *sonra* iki yönlü ölçüm. Ters sırada kendini kilitlersin.
+3. **S2 gerilim ölçümü** — multimetre alınınca; dokunma emniyeti kaydı açık.
+4. **Köprü teli** — söküldü mü, saklandı mı? Geri dönüş yolu bu. **Hâlâ
+   cevapsız.**
+5. **Sensör sapması** — birkaç gün izle (aşağıdaki 02:45 bölümü).
+6. Kural boşlukları: hafta sonu ısınma yok, sabah kuralı yok.
+7. `rule_active` dönüşü (yukarıda).
+
+---
+
 ## 15.10.2026 (02:45) — 🔥 FAZ 3 BİTTİ: KOMBİ BAĞLANDI VE ÇALIŞIYOR
 
 Serhat Bey kartı kombiye bağladı. **Kabul ölçümlerinin beşi de geçti.**
