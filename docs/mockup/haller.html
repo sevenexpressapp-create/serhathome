@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup — haller (0 dk, veri yok, sustu, hata)</title>
+<link rel="stylesheet" href="ortak.css">
+<style>
+  .hal { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 18px 0 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hal">1 — kapalı, bugün hiç yanmadı</div>
+  <section class="card burn-card" id="h1">
+    <h2>Kombi ne kadar yandı</h2>
+    <div class="burn-body">
+      <div class="pill"><span class="dot burn-dot"></span><span class="burn-pill-text"></span></div>
+      <div class="burn-lead"><span class="burn-pre"></span><span class="burn-num"></span><span class="burn-tail"></span></div>
+      <div class="burn-sub"></div><div class="burn-tiles"></div><div class="note burn-note"></div>
+    </div>
+    <div class="empty burn-empty hidden">Kombinin yanma süresi için henüz veri yok. Cihaz bağlandığında burada birikir.</div>
+    <div class="err burn-err hidden"></div>
+  </section>
+
+  <div class="hal">2 — yedi gündür hiç yanmadı (02–08.11 gerçeği)</div>
+  <section class="card burn-card" id="h2">
+    <h2>Kombi ne kadar yandı</h2>
+    <div class="burn-body">
+      <div class="pill"><span class="dot burn-dot"></span><span class="burn-pill-text"></span></div>
+      <div class="burn-lead"><span class="burn-pre"></span><span class="burn-num"></span><span class="burn-tail"></span></div>
+      <div class="burn-sub"></div><div class="burn-tiles"></div><div class="note burn-note"></div>
+    </div>
+    <div class="empty burn-empty hidden">Kombinin yanma süresi için henüz veri yok. Cihaz bağlandığında burada birikir.</div>
+    <div class="err burn-err hidden"></div>
+  </section>
+
+  <div class="hal">3 — cihaz sustu (23 dk veri yok)</div>
+  <section class="card burn-card" id="h3">
+    <h2>Kombi ne kadar yandı</h2>
+    <div class="burn-body">
+      <div class="pill"><span class="dot burn-dot"></span><span class="burn-pill-text"></span></div>
+      <div class="burn-lead"><span class="burn-pre"></span><span class="burn-num"></span><span class="burn-tail"></span></div>
+      <div class="burn-sub"></div><div class="burn-tiles"></div><div class="note burn-note"></div>
+    </div>
+    <div class="empty burn-empty hidden">Kombinin yanma süresi için henüz veri yok. Cihaz bağlandığında burada birikir.</div>
+    <div class="err burn-err hidden"></div>
+  </section>
+
+  <div class="hal">4 — hiç veri yok (0 dk DEĞİL: bilinmiyor)</div>
+  <section class="card burn-card" id="h4">
+    <h2>Kombi ne kadar yandı</h2>
+    <div class="burn-body">
+      <div class="pill"><span class="dot burn-dot"></span><span class="burn-pill-text"></span></div>
+      <div class="burn-lead"><span class="burn-pre"></span><span class="burn-num"></span><span class="burn-tail"></span></div>
+      <div class="burn-sub"></div><div class="burn-tiles"></div><div class="note burn-note"></div>
+    </div>
+    <div class="empty burn-empty hidden">Kombinin yanma süresi için henüz veri yok. Cihaz bağlandığında burada birikir.</div>
+    <div class="err burn-err hidden"></div>
+  </section>
+
+  <div class="hal">5 — okunamadı (hata, boş durumdan AYRI)</div>
+  <section class="card burn-card" id="h5">
+    <h2>Kombi ne kadar yandı</h2>
+    <div class="burn-body">
+      <div class="pill"><span class="dot burn-dot"></span><span class="burn-pill-text"></span></div>
+      <div class="burn-lead"><span class="burn-pre"></span><span class="burn-num"></span><span class="burn-tail"></span></div>
+      <div class="burn-sub"></div><div class="burn-tiles"></div><div class="note burn-note"></div>
+    </div>
+    <div class="empty burn-empty hidden">Kombinin yanma süresi için henüz veri yok. Cihaz bağlandığında burada birikir.</div>
+    <div class="err burn-err hidden"></div>
+  </section>
+
+  <div class="hal">6 — kayıt eksik (cihaz bir süre kayıtsız kaldı)</div>
+  <section class="card burn-card" id="h6">
+    <h2>Kombi ne kadar yandı</h2>
+    <div class="burn-body">
+      <div class="pill"><span class="dot burn-dot"></span><span class="burn-pill-text"></span></div>
+      <div class="burn-lead"><span class="burn-pre"></span><span class="burn-num"></span><span class="burn-tail"></span></div>
+      <div class="burn-sub"></div><div class="burn-tiles"></div><div class="note burn-note"></div>
+    </div>
+    <div class="empty burn-empty hidden">Kombinin yanma süresi için henüz veri yok. Cihaz bağlandığında burada birikir.</div>
+    <div class="err burn-err hidden"></div>
+  </section>
+
+  <div class="hal">7 — grafik: hedef bilinmiyor (eski kayıtlarda target_c boş)</div>
+  <section class="card">
+    <h2>Sıcaklık geçmişi</h2>
+    <div class="chartbox"><svg id="chart" role="img" aria-labelledby="chart-title"></svg></div>
+    <div class="legend">
+      <span><i style="background:var(--series-1)"></i>Oda sıcaklığı</span>
+      <span><i style="background:var(--series-2)"></i>Kombi yandı</span>
+      <span><i style="background:var(--muted)"></i><span id="lg-target">Hedef</span></span>
+      <span><i class="band" style="background:var(--muted);opacity:.28"></i><span id="lg-band">Karar aralığı</span></span>
+    </div>
+    <p class="explain" id="explain"></p>
+    <div class="empty hidden" id="chart-empty">Henüz kayıtlı veri yok. Cihaz bağlandığında geçmiş burada birikir.</div>
+  </section>
+
+  <div class="hal">8 — grafik: henüz veri yok (yükseklik 0, uydurma eksen YOK)</div>
+  <section class="card">
+    <h2>Sıcaklık geçmişi</h2>
+    <div class="empty">Henüz kayıtlı veri yok. Cihaz bağlandığında geçmiş burada birikir.</div>
+  </section>
+
+</div>
+<script src="veri.js"></script>
+<script src="mockup.js"></script>
+<script src="haller.js"></script>
+</body>
+</html>

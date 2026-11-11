@@ -6,6 +6,204 @@ neden). Ayrıntılı ölçümler `docs/FAZ1-TEST-SONUCLARI.md`'de.
 
 ---
 
+## 10.11.2026 (3. tur) — Kod denetiminin BLOK'u kapatıldı; kartın kendi testleri yazıldı
+
+Tasarım 2. turda ONAY verdi; kod denetimi BLOK verdi. Hepsi bu turda kapandı,
+**commit/push yine yok.** `node tests/panel_test.mjs` **24/24** (21 → 24).
+
+**A1 — kart ve grafik aynı kuralı çağırıyordu ama aynı DİZİYİ paylaşmıyordu.**
+Kart `lastRows`in tamamından, grafik `temp_c` dolu satırlardan hesaplıyordu;
+DHT11'in iki okumayı kaçırdığı yerde kart "tek yanma 19 dk" derken grafik aynı
+yanmayı **ikiye bölüyor** ve o aralığa "kayıt yok" işareti koyuyordu — oysa
+kayıt vardı, yalnız sıcaklık okunamamıştı. Artık yanma dizileri, boşluk kararı
+ve kadans **tek kaynaktan** (`yanmaDurumu()` → `lastRows`) geliyor; grafik
+onları çiziyor. İki olgu **ayrı işaretle** anlatılıyor: *kayıt yok* = dolgu +
+düz `--axis` kenar; *sıcaklık okunamadı* = dolgusuz, **kesikli** kenar. İkisinin
+de göstergede adı var.
+
+**A2 — gece yarısından sonra "Bugün" dünün toplamıydı** (5 dk'ya kadar).
+Sayıma `geceMs` yazılıyor; gece yarısı değişmişse "Bugün" **—** oluyor ve
+tazeleme hemen tetikleniyor.
+
+**A3 — aynı yanma sürerken 20 dk, bitince 19 dk görünüyordu.** Tek ölçü:
+**satır sayısı** (kutucuklar zaten sunucunun satır sayımı). Görünen aralık da
+son örneğin kapsadığı kadansın sonunda bitiyor, böylece "01:41–03:22 · 1 sa
+41 dk" kendi içinde tutarlı.
+
+**A4 — kartın hiç testi yoktu ve depo tohumu 5 dakikalıktı** (kart gerçeğin
+1/5'ini gösteriyordu). `tests/seed_demo.mjs` artık üretimin ritminde:
+**60 sn × 24 saat**, içinde **90 dakikalık kayıt boşluğu** ve yanan bir dizinin
+ortasında **iki satırlık `temp_c = null`**. Panel testine kart için üç kapı
+eklendi (D21 kart/grafik aynı dizi + boşluk davranışı · D22 toplamlar sunucunun
+bağımsız sayımıyla birebir · D23 sayım gelmeden "—"). Üçü de **sabotajla
+sınandı**: ilgili düzeltme geri alındığında kırmızıya dönüyorlar.
+
+**A5 — "1 satır = 1 dakika" iki yerde gömülüydü.** Kadans artık tek adlandırılmış
+sabit (`TELEMETRI_KADANS_TABANI_MS`, yorumunda kaynağı `device-sync`
+`TELEMETRY_MIN_GAP_MS` yazılı) ve **önce veriden ölçülüyor** (medyan aralık);
+kapsam beklentisi de ondan türüyor.
+
+**Orta kalemler:** O1 artan geri çekilme (30 sn → 1 dk → 5 dk, ölçüldü:
+29/59/299 sn) · O2 `burnCountsBusy` artık `resetView`de sıfırlanıyor + isteğe
+20 sn zaman aşımı · O3 testteki ">200" sabitleri çizim genişliğine bağlıydı,
+beklenti artık sayfanın verisinden türüyor · O4 "Kayıtlar 30 gün tutulur" sözü
+(budama cron'u kurulmadı) → **"30 günden eskisi bu ekranda gösterilmiyor."** ·
+O5 değişken gölgelemesi · O6 ölü alan + bayat yorum · O7 `yanmaDurumu()`
+önbelleğe alındı + `resize` `requestAnimationFrame` ile frenlendi · O8 cihaz
+okunamazken ayar/kural düğmeleri sessizce patlıyordu (artık Türkçe hata) ve
+`loadDevice` hatası paneli kalıcı ölü bırakıyordu — her yoklamada yeniden
+deneniyor.
+
+**Tasarımın üç kalemi:** T1 panelin tamamı artık **virgül** (durum kartı ve
+sayaç da) — görünür metinde noktalı ondalık **0**; T2 kayıt boşluğuna `--axis`
+kenar + göstergede "Kayıt yok" ve "Sıcaklık okunamadı"; T3 kırpılma cümlesi
+artık **görünür** `.explain` satırında. Nit'ler: kısa yanmada `rx` genişliğin
+yarısını geçmiyor, cihazın sustuğu süre 24 saati aşınca gün olarak yazılıyor.
+
+### 4. tur (kapanış) — emniyet kapısı + beş küçük kalem
+
+- **🔴 En önemlisi: `tests/panel_test.mjs`in yerel-yığın kapısı yoktu.** Takım
+  YAZAN ölçümler içeriyor (D17/D19 `device_settings`e gerçekten yazıyor) ve
+  hedefini `dashboard/config.js`ten alıyor — o dosya yayında **bulut**
+  projesini gösteriyor. Yanlış yöne koşulsa evin hedefini 5,5 °C'ye çekerdi.
+  Artık iki kapı var: (1) tarayıcı **açılmadan** önce panelin `config.js`i
+  okunuyor, hedef `127.0.0.1`/`localhost` değilse takım koşmadan çıkıyor
+  (çıkış kodu 2); (2) giriş/yazma adımından önce tarayıcının gerçekten
+  yüklediği `KOMBI_CONFIG.SUPABASE_URL` aynı ölçütle doğrulanıyor.
+  Üslup `seed_demo.mjs` / `rls_test.mjs` / `auth_policy_test.mjs` ile aynı.
+- Kadans artık **kapıya bağlı** (D21: `kadansSn === 60`) — yanlışlarsa kart ve
+  beklenti birlikte kaydığı için eskiden kapı yeşil kalıyordu.
+- D22'nin gece yarısı kör noktası: `"—"` artık 0'dan ayrı (`null`) ve "Bugün"
+  bacağına da `> 0` tabanı kondu.
+- Grafik işaretleri çizim alanına **kırpılıyor** (serinin ucundaki uzun sensör
+  arızasında işaret Y etiketlerinin üstüne taşıyordu); yeni kapı **D24**.
+- Olumsuz iddiaların (`!sayfadaSicaklikVar`, `sahteSayiVar === false`) içine
+  **kalibrasyon** satırı kondu: desen bir ters-bölü kaybederse kapı sessizce
+  yeşil kalırdı.
+- `renderChart` artık parametresiz; seri tek kaynaktan (`lastRows`/`settings`).
+
+**🔴 Açık kalemler (bilinçli olarak ertelendi, Patron kararı):**
+1. `dashboard/app.js` 1.300 satıra, `renderChart` ~250 satıra çıktı. Dosyayı
+   bölmek üç denetim turunun hemen ardından gereksiz risk; ayrıca CSP
+   (`script-src 'self'`) yüzünden ek dosya bedava değil.
+2. Kenar payı (14 px) testte tekrar ediliyor; tek kaynaktan türemiyor.
+3. Tohumun idempotentliği 26 saatle sınırlı (daha eski ölçüm satırları kalır).
+4. Tohumun bastığı bağımsız sayımlar (`satir/yanan/bugunYanan`) panel testinde
+   tüketilmiyor; D22 sayımı sunucudan kendisi çekiyor.
+5. Canlı Supabase'in Max rows ayarı (Serhat Bey'in tıkı) ve `prune_telemetry`
+   cron'u hâlâ kurulmadı — kart artık ikisine de söz vermiyor.
+
+---
+
+## 10.11.2026 (2. tur) — Tasarım denetiminin BLOK'u kapatıldı + panel tam Türkçe
+
+Denetim raporu ve 21 kanıt görüntüsü `docs/denetim-2026-11-10/` (depoya
+**girmiyor**, `.gitignore`'a `docs/denetim-*/` eklendi; spec ve `docs/mockup/`
+takipte kalır). Yine **commit/push yok.**
+
+**BLOK — kayıt boşluğu "yanma" diye çiziliyordu.** Grafiğin yanma şeridi iki
+satır arasındaki zamana bakmıyordu; kartın aynı işi yapan döngüsü bakıyordu.
+3 saatlik kayıt deliğinin iki yanındaki 20+20 dk yanma grafikte **tek 219
+dakikalık blok** olarak çiziliyor, sıcaklık yolu da deliğin üzerinden düz bir
+çapraz çizip **ölçülmemiş bir ısınma** gösteriyordu. Çözüm: boşluk kuralı tek
+fonksiyonda (`yanmaDizileri`) toplandı, kart ve grafik aynı fonksiyonu çağırıyor;
+sıcaklık yolu ve zarfı boşlukta **kırılıyor**; boşluğun kendisi `--grid` ile
+işaretleniyor. Eşik sabit değil, serinin **kendi medyan aralığının iki katı**
+(60 sn'lik seride 2 dk; 5 dakikalık seyrek seride 10 dk — sabit 2 dk yazsaydık
+seyrek seride çizgi parça parça dağılırdı).
+
+**Satır tavanı (bulgu bendendi, çözümü Patron karara bağladı).** Sunucu bir
+sorguda en çok 1.000 satır döndürüyor (`supabase/config.toml:18`; bulut
+varsayılanı da 1.000) ama 60 sn'de bir yazan cihaz 24 saatte 1.439 satır
+üretiyor. İki önlem: (1) telemetri sorgusu **en yeniden geriye** sıralanıp JS'te
+çevriliyor → tavan ısırsa bile grafiğin sağ ucu her zaman şu an, kaybedilen
+kısım geçmişin eskisi; (2) **bugün ve 24 saat yanma süreleri de sunucuda
+sayılıyor** → indirilen pencere kırpılsa bile kart sayıları doğru. Grafiğin
+`<title>`'ı da kırpılmışsa artık "son 24 saat" demiyor, çizilen aralığı yazıyor.
+
+**Üç küçük düzeltme:** (F2) süren yanma varken "son yanma" satırı sessizce boş
+kalıyordu — koşul "tamamlanmış yanma yok" oldu, ayrıca sorgu süren yanmanın
+başlangıcından **öncesine** bakıyor (yoksa kart süren yanmayı "son yanma" diye
+yazıyordu). (F3) sayım gelmeden "henüz veri yok" deniyordu; artık o cümle
+telemetri okundu **ve** 30 günlük sayım gerçekten 0 ise çıkıyor, bilinmiyorken
+"—" yazıyor; grafiğin boş uyarısı da aynı kurala bağlandı. (F4) yorumdaki ham
+renk kodu kaldırıldı (ham renk sayımı 33 → 31).
+
+**Test kapısı (F5).** `kesikliHedef === beklenenParca` koşulu, `target_c`'nin
+tamamı boş olan kayıtta doğru çizimi kırmızı yapardı (çizim 1, beklenti 0).
+Beklenti artık o dalı da kapsıyor.
+
+**Panel tam Türkçe.** `index.html` + `app.js`'te 53 kullanıcı dizgesi
+(+ testte 5 iddia) düzeltildi; Serhat Bey'in kararıyla rozet `Isitma acik/kapali`
+yerine **`Kombi yanıyor` / `Kombi kapalı`** — panel aynı olguya tek ad veriyor.
+
+**Ölçümler (hepsi bu turda koştu).** `node tests/panel_test.mjs` **21/21**
+(temiz tohumla). Fiziksel tutarlı 1.261 satırlık seri + 3 saatlik delikle:
+deliğe binen şerit **0**, boşluk dikdörtgeni **180 dk**, sıcaklık yolu **2
+parça**, indirilen satır **1.000** (tavan ısırdı) ama kartın "Bugün 1 sa 41 dk"
+ve "24 saat 8 sa 26 dk" değerleri tohumun bağımsız sayımıyla **birebir** aynı;
+grafiğin sağ ucu şimdiden **1 dk** önce. F3 üç dalda ölçüldü (telemetri
+okunmadı / sayım beklenirken / gerçekten kayıt yok) — boş cümle yalnız sonuncuda.
+Aydınlık + karanlık ekran görüntüleri alındı ve bakıldı.
+
+---
+
+## 10.11.2026 — Grafik düzeltildi + "Kombi ne kadar yandı" kartı eklendi
+
+Uygulanan belge: **`docs/TASARIM-grafik-ve-yanma-suresi.md`** (tasarımcı, onaylı).
+Değişen üç dosya: `dashboard/app.js`, `dashboard/index.html`,
+`tests/panel_test.mjs`. **Commit atılmadı, push edilmedi** — Netlify GitHub'a
+bağlı olduğu için yayın kararı Serhat Bey'in.
+
+**Grafik (`app.js` `renderChart`).** Eksen etiketi artık çizgisinin **tam**
+değerini gösteriyor: alan 0,5'e dışa yuvarlanıyor, yürürlükteki yakma/söndürme
+eşiklerini içeriyor, etiket tek ondalık + virgül (`20,0`), adım {0,5/1/2}
+içinden etiket arası ≥ 40 px olanı. Eski kusur 0,3–0,5 °C'lik sessiz bir
+yalandı (ızgara 19,7'de, etiket "20"). 1.439 ham nokta doğrudan basılmıyor:
+1 px'lik sütunlarda **ortalama + en düşük/en yüksek zarfı** (seyreltme değil —
+seyreltme tek noktalık tepeyi siler). X ekseni yuvarlak saatlere oturdu, gece
+yarısı tikinin altında gün yazıyor. Hedef artık **basamaklı** ve her basamağın
+**karar aralığı** (yakma–söndürme şeridi) görünüyor.
+
+**Veri yolu değişikliği (bunu atlayan basamaklı hedefi kuramaz):** telemetri
+sorgusu artık `target_c`'yi de çekiyor (`app.js:153` civarı). Hedef çizgisi
+`device_settings`'ten değil **telemetri satırlarının kendi `target_c`'sinden**
+türüyor; çünkü iki senaryo kuralı hedefi gün içinde değiştiriyor
+(02:00 → 22 °C, 06:00 → 21 °C — **bu kurallar bilinçli, değiştirilmedi**).
+
+**Kart.** "Anlık durum"un altında: canlı süre / bugün, son yanma, 4 kutucuk
+(bugün · 24 saat · 7 gün · 30 gün). Yanma süresi = `relay_on = true` satır
+sayısı × 1 dk. Bugün/24 saat/canlı süre **zaten çekilen** 24 saatlik
+pencereden (0 ek istek); 7/30 gün + kapsam + eski "son yanma" sunucuda
+sayılıyor (`count: exact, head: true`, göç gerekmedi) ve **15 sn'lik yoklamaya
+bağlı değil** — en çok 5 dakikada bir. Ölçüldü: 45 saniyede (3 yoklama)
+ağda yalnız var olan 4 sorgu × 3 göründü, sayım isteği **sıfır**; `burnCountsAt`
+geri alınınca sayımlar gerçekten koşuyor (pozitif kontrol).
+**Gaz/₺ tüketimi kapsam dışı** (Serhat Bey 09.11: "tüketimi boşver") — alan,
+yer tutucu, "ileride eklenir" notu yok.
+
+**Kontrast.** Aydınlık moddaki `--muted` #898781 → **#726f6a** (3,50:1 → 4,87:1).
+Karanlık moddaki değişmedi. Grafik eksen etiketleri `--text-2`'ye taşındı.
+Panelin tüm küçük gri metni bir tık koyulaştı — beklenen sonuç.
+
+**Bir sapma var (karar Serhat Bey'in):** panelin eski metinleri Türkçe
+karakter**siz** yazılmış ("Anlik durum", "Sicaklik gecmisi"); spec'in metinleri
+ise tam Türkçe ("Kombi ne kadar yandı"). Onaylı metne uydum, dolayısıyla panel
+şu an **karışık** görünüyor. Eski metinleri de düzeltmek ayrı, küçük bir iş.
+
+**Ölçümler.** `tests/panel_test.mjs` **21/21** (yerel Supabase yığını + gerçek
+CSP başlıkları + başsız Chrome). D3 artık `data-role` seçicilerine bağlı ve
+beklenen hedef parçası sayısını **sayfanın kendi verisinden** türetiyor —
+eskiden `line[stroke-dasharray] === 1` koşulu tohumun sabit hedefi sayesinde
+tutuyordu, canlı şekilli veride doğru çizim kapıyı kırmızı yapardı. Eksen:
+etiket–çizgi sapması **0 px**, etiketlerden türetilen ölçekle son okumanın
+çizildiği nokta sapması **0 px**. Basamaklı hedef canlı şekilli veriyle
+ölçüldü: çizilen basamaklar [22, 21, 22] = verideki ayrık hedefler, bant
+kenarları [19,5 20,5 22,5 23,5] = beklenen eşikler. 360/500/1000 px'te yatay
+kaydırma yok, konsol temiz; aydınlık ve karanlık ekran görüntüleri alındı.
+
+---
+
 ## 15.10.2026 (03:00) — ⏸️ TUR KAPANDI: ikinci test doğruladı, buradan devam
 
 Serhat Bey bağlantıdan sonra **ikinci bir test** yaptı. Faz 3'ün D1–D3

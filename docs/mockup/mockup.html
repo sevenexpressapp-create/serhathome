@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup — grafik + yanma süresi</title>
+<link rel="stylesheet" href="ortak.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Panelin "Anlık durum" kartından SONRA gelecek YENİ kart -->
+  <section class="card" id="burn-card">
+    <h2>Kombi ne kadar yandı</h2>
+    <div class="burn-body">
+      <div class="pill"><span class="dot burn-dot"></span><span class="burn-pill-text"></span></div>
+      <div class="burn-lead"><span class="burn-pre"></span><span class="burn-num"></span><span class="burn-tail"></span></div>
+      <div class="burn-sub"></div>
+      <div class="burn-tiles"></div>
+      <div class="note burn-note"></div>
+    </div>
+    <div class="empty burn-empty hidden">Kombinin yanma süresi için henüz veri yok. Cihaz bağlandığında burada birikir.</div>
+    <div class="err burn-err hidden"></div>
+  </section>
+
+  <!-- Var olan "Sıcaklık geçmişi" kartı, YENİ grafikle -->
+  <section class="card">
+    <h2>Sıcaklık geçmişi</h2>
+    <div class="chartbox">
+      <svg id="chart" role="img" aria-labelledby="chart-title"></svg>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--series-1)"></i>Oda sıcaklığı</span>
+      <span><i style="background:var(--series-2)"></i>Kombi yandı</span>
+      <span><i style="background:var(--muted)"></i><span id="lg-target">Hedef</span></span>
+      <span><i class="band" style="background:var(--muted);opacity:.28"></i><span id="lg-band">Karar aralığı</span></span>
+    </div>
+    <p class="explain" id="explain"></p>
+    <div class="empty hidden" id="chart-empty">Henüz kayıtlı veri yok. Cihaz bağlandığında geçmiş burada birikir.</div>
+    <details style="margin-top:12px">
+      <summary>Veriyi tablo olarak gör</summary>
+      <table id="data-table">
+        <thead><tr><th>Saat</th><th class="num">°C</th><th class="num">Hedef</th><th class="num">Nem</th><th>Kombi</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </details>
+  </section>
+
+</div>
+<script src="veri.js"></script>
+<script src="mockup.js"></script>
+</body>
+</html>

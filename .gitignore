@@ -35,3 +35,8 @@ npm-debug.log*
 *.log
 tests/out/
 .DS_Store
+
+# --- Tasarim denetimi kanit goruntuleri ---
+# Depo herkese acik; denetim turlarinin ekran goruntuleri yerelde kalir.
+# Tasarim spec'i (docs/TASARIM-*.md) ve docs/mockup/ TAKIPTE kalir.
+docs/denetim-*/

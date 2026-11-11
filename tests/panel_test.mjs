@@ -10,6 +10,37 @@ const SHOT_DIR = process.env.SHOT_DIR || ".";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// --- YEREL YIGIN KAPISI (her seyden ONCE) -----------------------------------
+// Bu takim YAZAN olcumler iceriyor: D17/D19 `device_settings`e gercekten yaziyor
+// (hedef 5,5 °C / donma esigi 5,0 °C). Panelin hedefi `dashboard/config.js`den
+// geliyor ve o dosya yayin aninda BULUT projesine kuruluyor — yani yanlis yone
+// kosulursa Serhat Bey'in evindeki kombinin hedefi degisirdi.
+// Kapi tarayici ACILMADAN once calisir: hedefi panelin kendi `config.js`inden
+// okur, yerel degilse CANLIYA TEK ISTEK GITMEDEN cikar.
+// (Ayni kapi: `seed_demo.mjs:9`, `rls_test.mjs`, `auth_policy_test.mjs`.)
+{
+  const cfgUrl = new URL("config.js", BASE).href;
+  let hedef = null;
+  try {
+    const metin = await (await fetch(cfgUrl)).text();
+    hedef = (/SUPABASE_URL:\s*["']([^"']+)["']/.exec(metin) || [])[1] || null;
+  } catch (e) {
+    console.error(`DUR: panelin yapilandirmasi okunamadi (${cfgUrl}): ${e.message}`);
+    process.exit(2);
+  }
+  if (!hedef) {
+    console.error(`DUR: ${cfgUrl} icinde SUPABASE_URL bulunamadi; hedefi dogrulayamadan kosmam.`);
+    process.exit(2);
+  }
+  if (!/\/\/(127\.0\.0\.1|localhost)([:/]|$)/.test(hedef)) {
+    console.error(`DUR: bu takim YAZAN olcumler iceriyor ve YALNIZ yerel yigina karsi kosar.\n` +
+      `     Panelin hedefi: ${hedef}\n` +
+      `     Yerel yigini baslatip paneli ona bakan bir config.js ile servis edin.`);
+    process.exit(2);
+  }
+  console.log(`HEDEF: ${hedef} (yerel) — yazan olcumler icin kapi acik.`);
+}
+
 async function targets() {
   const res = await fetch(`http://127.0.0.1:${PORT}/json/list`);
   return res.json();
@@ -65,7 +96,12 @@ class CDP {
   }
 }
 
+// Panel ondalik ayirici olarak VIRGUL kullaniyor (tr-TR); olcum sayilari
+// karsilastirirken dizgeye degil SAYIYA bakar.
+const say = (s) => Number(String(s).replace(",", "."));
+
 const results = [];
+
 const check = (name, pass, detail) => {
   results.push({ name, pass, detail });
   console.log(`${pass ? "GECTI " : "KALDI "} ${name}${detail ? " — " + detail : ""}`);
@@ -113,15 +149,26 @@ await sleep(2500);
     authGorunur: !document.getElementById('auth-card').classList.contains('hidden'),
     panelGizli: document.getElementById('app').classList.contains('hidden'),
     sayfadaSicaklikVar: /\\d\\d[.,]\\d\\s*°C/.test(document.body.innerText),
+    desenCalisiyor: /\\d\\d[.,]\\d\\s*°C/.test('ornek 21,6 °C metni'),
     govde: document.body.innerText.length
   })`);
   const o = JSON.parse(v);
-  check("D1 girissiz ziyaretci: yalniz giris formu, HIC veri yok",
-    o.authGorunur && o.panelGizli && !o.sayfadaSicaklikVar, v);
+  check("D1 girissiz ziyaretci: yalniz giris formu, HIC veri yok (desen kalibre)",
+    o.desenCalisiyor && o.authGorunur && o.panelGizli && !o.sayfadaSicaklikVar, v);
   await shot("panel-1-giris");
 }
 
 // --- 2) Giris --------------------------------------------------------------
+// Ikinci emniyet: sayfanin GERCEKTEN yukledigi yapilandirma yerel mi? (Ilk kapi
+// `config.js`i dosya olarak okumustu; burada tarayicinin kullandigi deger
+// olculuyor ve YAZAN adimlardan ONCE duruluyor.)
+{
+  const hedef = await cdp.eval(`window.KOMBI_CONFIG && window.KOMBI_CONFIG.SUPABASE_URL`);
+  if (!/\/\/(127\.0\.0\.1|localhost)([:/]|$)/.test(String(hedef))) {
+    console.error("DUR: tarayicidaki hedef yerel degil (" + hedef + "); yazan olcumler kosturulmaz.");
+    process.exit(2);
+  }
+}
 await cdp.eval(`(() => {
   const e = document.getElementById('email'), p = document.getElementById('password');
   e.value = ${JSON.stringify(EMAIL)}; p.value = ${JSON.stringify(PASSWORD)};
@@ -142,7 +189,7 @@ await sleep(4000);
   })`);
   const o = JSON.parse(v);
   check("D2 giris calisiyor ve canli degerler geliyor",
-    o.panelGorunur && o.temp === "20.4" && o.cevrim === "cevrimici" && o.role === "Isitma acik" && o.cihaz === "Salon kombisi", v);
+    o.panelGorunur && say(o.temp) === 20.4 && o.cevrim === "çevrimiçi" && o.role === "Kombi yanıyor" && o.cihaz === "Salon kombisi", v);
 }
 
 // --- 2b) K1: "SU AN NEDEN 25 °C?" panelde cevaplaniyor mu ------------------
@@ -154,30 +201,222 @@ await sleep(4000);
   })`);
   const o = JSON.parse(v);
   check("D12 (K1) yururlukteki hedef 25 ve KAYNAGI panelde yaziyor (07:00 senaryosu, taban 21,5)",
-    o.hedef === "25.0 °C" && /07:00 senaryosu/.test(o.kaynak) && /21\.5/.test(o.kaynak), v);
+    o.hedef === "25,0 °C" && /07:00 senaryosu/.test(o.kaynak) && /21,5/.test(o.kaynak), v);
 }
 
-// --- 3) Grafik gercekten CIZILDI mi (cizgi + isitma seridi + hedef) ---------
+// --- 3) Grafik gercekten CIZILDI mi (sicaklik + zarf + yanma + basamakli
+//        hedef + karar araligi) --------------------------------------------
+// ⚠️ Secicileri `data-role`lere SIKILASTIRDIM. Eskiden "ilk <path>", "butun
+// <rect>'ler" ve "kesikli cizgi sayisi TAM 1" olculuyordu. O sonuncusu
+// tasarimi degil TOHUM VERISININ BIR TESADUFUNU olcuyordu: `seed_demo.mjs`
+// hedefi hic degistirmiyor, o yuzden basamak sayisi 1 cikiyor. Gercek evdeki
+// veride hedef gun icinde iki kez degisiyor ve ayni sayi 3 oluyordu — yani
+// eski kapi, dogru calisan bir cizimi KIRMIZI yapardi. Beklenen basamak sayisi
+// artik sayfadaki veriden TURETILIYOR.
 {
   const v = await cdp.eval(`(() => {
     const svg = document.getElementById('chart');
-    const path = svg.querySelector('path');
+    const sicaklik = svg.querySelector('path[data-role=temp]');
+    const zarf = svg.querySelector('path[data-role=envelope]');
+    // Hedef kac parcaya bolunmeli? Cizimden DEGIL, cizimin girdisinden hesapla.
+    // ⚠️ Kural iki dalli: kayitlarin HICBIRINDE hedef yoksa (eski firmware)
+    // tasarim "basamak uydurma, yururlukteki AYARI tek duzluk ciz" diyor, yani
+    // beklenen 1'dir — 0 degil. Bunu yazmazsak kapi yine tohumun tesadufune
+    // yaslanir (tohumda target_c dolu oldugu icin fark edilmez) ve dogru calisan
+    // cizimi kirmizi yapar.
+    const pts = lastRows.filter(r => r.temp !== null);
+    // Dugum sayisi ARTIK veriye degil CIZIM GENISLIGINE bagli (1 px'lik
+    // sutunlarda ozetleniyor): sabit ">200" dar pencerede dogru cizimi
+    // kirmizi yapardi. Beklenti sayfanin kendi verisinden turetiliyor.
+    const dKadans = yanmaDurumu();
+    const plotWd = svg.viewBox.baseVal.width - 48, mld = 38;
+    const Xd = (t) => mld + ((t - pts[0].t) / (pts[pts.length - 1].t - pts[0].t)) * plotWd;
+    const kolD = new Map();
+    for (const p of pts) {
+      const k = Math.min(Math.round(plotWd) - 1, Math.max(0, Math.floor(Xd(p.t) - mld)));
+      const c = kolD.get(k) || { t0: p.t, t1: p.t };
+      c.t0 = Math.min(c.t0, p.t); c.t1 = Math.max(c.t1, p.t); kolD.set(k, c);
+    }
+    const kolSirali = [...kolD.keys()].sort((a, b) => a - b);
+    let yolParca = kolSirali.length ? 1 : 0;
+    for (let i = 1; i < kolSirali.length; i++) {
+      if (kolD.get(kolSirali[i]).t0 - kolD.get(kolSirali[i - 1]).t1 > dKadans.esik) yolParca++;
+    }
+    const hedefi = (r) => (r.tg === null || r.tg === undefined) ? null : Number(r.tg);
+    const hepsiBos = pts.every(r => hedefi(r) === null);
+    let beklenenParca = 0;
+    if (hepsiBos) {
+      beklenenParca = (settings && settings.target_c !== null && settings.target_c !== undefined) ? 1 : 0;
+    } else {
+      let oncekiHedef = 'yok';
+      for (const r of pts) {
+        const tg = hedefi(r);
+        if (tg !== oncekiHedef) { if (tg !== null) beklenenParca++; oncekiHedef = tg; }
+      }
+    }
     return JSON.stringify({
       yukseklik: Math.round(svg.getBoundingClientRect().height),
       genislik: Math.round(svg.getBoundingClientRect().width),
-      cizgiNoktaSayisi: path ? (path.getAttribute('d').match(/L/g) || []).length : 0,
-      cizgiRengi: path ? getComputedStyle(path).stroke : null,
-      isitmaSeridi: svg.querySelectorAll('rect').length,
-      kesikliHedef: svg.querySelectorAll('line[stroke-dasharray]').length,
+      cizgiNoktaSayisi: sicaklik ? (sicaklik.getAttribute('d').match(/L/g) || []).length : 0,
+      cizgiRengi: sicaklik ? getComputedStyle(sicaklik).stroke : null,
+      zarfL: zarf ? (zarf.getAttribute('d').match(/L/g) || []).length : 0,
+      yanmaSeridi: svg.querySelectorAll('rect[data-role=burn]').length,
+      kararAraligi: svg.querySelectorAll('rect[data-role=band]').length,
+      kesikliHedef: svg.querySelectorAll('line[data-role=target][stroke-dasharray]').length,
+      beklenenParca,
+      beklenenDugum: kolSirali.length, beklenenYolParca: yolParca,
       bosUyariGorunur: !document.getElementById('chart-empty').classList.contains('hidden'),
-      tabloSatir: document.querySelectorAll('#data-table tbody tr').length
+      tabloSatir: document.querySelectorAll('#data-table tbody tr').length,
+      tabloSutun: document.querySelectorAll('#data-table thead th').length
     });
   })()`);
   const o = JSON.parse(v);
-  check("D3 grafik cizildi (tek seri cizgi + isitma seridi + kesikli hedef)",
-    o.cizgiNoktaSayisi > 200 && o.isitmaSeridi >= 2 && o.kesikliHedef === 1 && !o.bosUyariGorunur && o.yukseklik > 200, v);
-  check("D4 grafigin metin karsiligi (tablo) dolu", o.tabloSatir > 0, `satir=${o.tabloSatir}`);
+  check("D3 grafik cizildi (sicaklik + zarf + yanma seridi + basamakli hedef + karar araligi)",
+    o.cizgiNoktaSayisi === o.beklenenDugum - o.beklenenYolParca &&
+    o.zarfL === 2 * o.beklenenDugum - o.beklenenYolParca &&
+    o.beklenenDugum > 100 && o.yanmaSeridi >= 1 && o.kararAraligi >= 1 &&
+    o.kesikliHedef >= 1 && o.kesikliHedef === o.beklenenParca &&
+    !o.bosUyariGorunur && o.yukseklik > 200, v);
+  check("D4 grafigin metin karsiligi (tablo) dolu ve Hedef sutunu var",
+    o.tabloSatir > 0 && o.tabloSutun === 5, `satir=${o.tabloSatir} sutun=${o.tabloSutun}`);
 }
+
+// --- 3b) KART: kayit boslugu, sensor boslugu ve toplamlar -------------------
+// ⚠️ Bu uc olcum kartin KENDISINI olcer. Once hicbiri yoktu: 21 kontrolun
+// hicbiri `#burn-*`e dokunmuyordu, yani kart depoda OLCUSUZDU.
+{
+  const v = await cdp.eval(`(() => {
+    const svg = document.getElementById('chart');
+    const d = yanmaDurumu();
+    const pts = lastRows.filter(r => r.temp !== null);
+    const x0 = pts[0].t, x1 = pts[pts.length - 1].t;
+    const plotW = svg.viewBox.baseVal.width - 48, ml = 38;
+    const zaman = (x) => x0 + ((x - ml) / plotW) * (x1 - x0);
+    const serit = [...svg.querySelectorAll('rect[data-role=burn]')].map(r => {
+      const xa = Number(r.getAttribute('x')), w = Number(r.getAttribute('width'));
+      return [zaman(xa), zaman(xa + w)];
+    });
+    // (a) Hicbir serit KAYIT BOSLUGUNU kopruleyemez.
+    const deligeBinen = serit.filter(([sa, sb]) =>
+      d.kayitBosluklari.some(([a, b]) => sa < b - 60000 && sb > a + 60000)).length;
+    // (b) SENSOR boslugu (kayit var, sicaklik yok) bir yanmayi BOLMEMELI:
+    //     hicbir serit kenari sensor boslugunun ICINDE bitmemeli/baslamamali.
+    const sensorIcindeKenar = serit.filter(([sa, sb]) =>
+      d.sensorBosluklari.some(([a, b]) => (sa > a && sa < b) || (sb > a && sb < b))).length;
+    return JSON.stringify({
+      kartDizi: d.diziler.length, grafikSerit: serit.length,
+      kayitBoslugu: d.kayitBosluklari.length, sensorBoslugu: d.sensorBosluklari.length,
+      kadansSn: Math.round(d.kadans / 1000),
+      DELIGE_BINEN: deligeBinen, SENSOR_ICINDE_KENAR: sensorIcindeKenar,
+      bosIsaretRect: svg.querySelectorAll('rect[data-role=gap]').length,
+      sensorIsaretCizgi: svg.querySelectorAll('line[data-role=sensor-gap]').length
+    });
+  })()`);
+  const o = JSON.parse(v);
+  check("D21 kart ve grafik AYNI yanma dizisini kullaniyor; kayit boslugu kopru DEGIL, sensor boslugu yanmayi BOLMUYOR",
+    o.kadansSn === 60 && o.kartDizi === o.grafikSerit && o.kayitBoslugu >= 1 && o.sensorBoslugu >= 1 &&
+    o.DELIGE_BINEN === 0 && o.SENSOR_ICINDE_KENAR === 0 &&
+    o.bosIsaretRect === o.kayitBoslugu && o.sensorIsaretCizgi === 2 * o.sensorBoslugu, v);
+}
+
+// --- 3c) KART TOPLAMLARI: sunucunun BAGIMSIZ sayimiyla birebir -------------
+{
+  const v = await cdp.eval(`(async () => {
+    const say = async (suzgec) => {
+      const r = await fetch(window.KOMBI_CONFIG.SUPABASE_URL + '/rest/v1/telemetry?select=id&' + suzgec, {
+        headers: { apikey: window.KOMBI_CONFIG.SUPABASE_ANON_KEY,
+                   Authorization: 'Bearer ' + JSON.parse(localStorage.getItem('kombi-auth')).access_token,
+                   Prefer: 'count=exact', Range: '0-0' } });
+      return Number((r.headers.get('content-range') || '0-0/0').split('/')[1]);
+    };
+    const gece = new Date(); gece.setHours(0, 0, 0, 0);
+    const iso24 = new Date(Date.now() - 24 * 3600e3).toISOString();
+    const bugunSatir = await say('device_id=eq.kombi-salon&relay_on=eq.true&ts=gte.' + gece.toISOString());
+    const saat24Satir = await say('device_id=eq.kombi-salon&relay_on=eq.true&ts=gte.' + iso24);
+    const kadans = yanmaDurumu().kadans;
+    // ⚠️ Bu kod SABLON DIZGESI icinde yasiyor: \\d yazilmazsa kacis yutulur,
+    // desen /(d+) sa/ olur ve sessizce 0 doner (ilk kosumda tam bu oldu).
+    const dkCoz = (s) => { const a = /(\\d+) sa/.exec(s), b = /(\\d+) dk/.exec(s);
+      // "—" SAYI DEGILDIR: 0 donseydi gece yarisina yakin pencerede
+      // beklenen de 0 olur, "0 === 0" diye sahte yesil verirdi.
+      if (!a && !b) return null;
+      return (a ? Number(a[1]) * 60 : 0) + (b ? Number(b[1]) : 0); };
+    // Alet kendi POZITIF KONTROLUNDEN gecsin (kacis yutulursa desen tutmaz).
+    const cozucuCalisiyor = dkCoz("1 sa 53 dk") === 113 && dkCoz("—") === null;
+    const kutu = [...document.getElementById('burn-tiles').querySelectorAll('.v')].map(v => v.textContent);
+    return JSON.stringify({
+      beklenenBugunDk: Math.round(bugunSatir * kadans / 60000),
+      beklenen24Dk: Math.round(saat24Satir * kadans / 60000),
+      cozucuCalisiyor,
+      kartBugunDk: dkCoz(kutu[0]), kart24Dk: dkCoz(kutu[1]),
+      kutular: kutu.join(' | '),
+      // indirilen pencere kirpilmis olabilir: kart SUNUCU sayimini gostermeli
+      indirilenSatir: lastRows.length, pencereYanikSatir: lastRows.filter(r => r.heat).length
+    });
+  })()`);
+  const o = JSON.parse(v);
+  check("D22 kart toplamlari sunucunun bagimsiz sayimiyla BIREBIR (indirilen pencere kirpilsa da)",
+    o.cozucuCalisiyor && o.kartBugunDk === o.beklenenBugunDk && o.kart24Dk === o.beklenen24Dk &&
+    o.beklenen24Dk > 0 && o.beklenenBugunDk > 0, v);
+}
+
+// --- 3d) SAYIM GELMEDEN "—" (0 degil, "veri yok" hic degil) ----------------
+{
+  const v = await cdp.eval(`(() => {
+    const yedek = burnCounts;
+    burnCounts = null; renderBurn();
+    const bekleyen = {
+      kutular: [...document.getElementById('burn-tiles').querySelectorAll('.v')].map(v => v.textContent).join('|'),
+      bosCumle: !document.getElementById('burn-empty').classList.contains('hidden')
+    };
+    burnCounts = yedek; renderBurn();
+    const gelince = {
+      kutular: [...document.getElementById('burn-tiles').querySelectorAll('.v')].map(v => v.textContent).join('|'),
+      bosCumle: !document.getElementById('burn-empty').classList.contains('hidden')
+    };
+    return JSON.stringify({ bekleyen, gelince });
+  })()`);
+  const o = JSON.parse(v);
+  check("D23 sayim gelmeden kutucuklar '—' (0 YAZMIYOR, 'veri yok' DEMIYOR), gelince sayi",
+    o.bekleyen.kutular === "—|—|—|—" && o.bekleyen.bosCumle === false &&
+    !o.gelince.kutular.includes("—") && o.gelince.bosCumle === false, v);
+}
+
+// --- 3e) UC HAL: serinin BASINDA uzun sensor arizasi ----------------------
+// Koordinatlar `temp_c` dolu satirlardan, isaretler ise TUM satirlardan
+// turuyor. Serinin ucunda sensor olurse (role kaydi surerken sicaklik yok)
+// isaret cizim alaninin disina dusuyordu: solda Y etiketlerinin uzerine.
+// Tohumun sensor boslugu pencerenin ORTASINDA oldugu icin hicbir kapi bunu
+// gormuyordu; burada bilerek uca tasiniyor.
+{
+  const v = await cdp.eval(`(() => {
+    const yedekRows = lastRows;
+    // Ilk 25 satir: kayit VAR, sicaklik YOK, role ACIK.
+    lastRows = lastRows.map((r, i) => (i < 25 ? { ...r, temp: null, heat: true } : r));
+    durumOnbellek = null;
+    renderChart();
+    const svg = document.getElementById('chart');
+    const sol = 38, sag = svg.viewBox.baseVal.width - 10;
+    const ucu = (el) => (el.tagName === 'rect'
+      ? [Number(el.getAttribute('x')), Number(el.getAttribute('x')) + Number(el.getAttribute('width'))]
+      : [Number(el.getAttribute('x1')), Number(el.getAttribute('x2'))]);
+    const isaretler = [...svg.querySelectorAll(
+      '[data-role=gap],[data-role=gap-edge],[data-role=sensor-gap],[data-role=burn]')].map(ucu);
+    const tasan = isaretler.filter(([a, b]) => a < sol - 0.5 || b > sag + 0.5);
+    const sonuc = {
+      isaretSayisi: isaretler.length, TASAN: tasan.length, ornekTasan: tasan.slice(0, 3),
+      alan: [sol, Math.round(sag)],
+      ucSensorIsareti: svg.querySelectorAll('line[data-role=sensor-gap]').length
+    };
+    lastRows = yedekRows; durumOnbellek = null; renderChart();
+    return JSON.stringify(sonuc);
+  })()`);
+  const o = JSON.parse(v);
+  check("D24 serinin ucundaki sensor arizasinda isaretler cizim alanini TASMIYOR",
+    o.TASAN === 0 && o.isaretSayisi > 0 && o.ucSensorIsareti >= 2, v);
+}
+
+
 
 // --- 4) Mobil genislik: yatay kaydirma OLMAMALI ----------------------------
 {
@@ -203,8 +442,8 @@ await sleep(4000);
   await sleep(2500);
   const after = await cdp.eval(`document.getElementById('target-val').textContent`);
   const err = await cdp.eval(`document.getElementById('t-err').textContent`);
-  check("D6 panelden hedef yazildi (+1.0 °C)",
-    Number(after) === Number(before) + 1 && !err, `once=${before} sonra=${after} hata="${err}"`);
+  check("D6 panelden hedef yazildi (+1,0 °C)",
+    say(after) === say(before) + 1 && !err, `once=${before} sonra=${after} hata="${err}"`);
   // Gercekten veritabaninda mi? (vekil degil hedefin kendisi)
   const st = JSON.parse(await cdp.eval(`(async () => {
     const r = await fetch(window.KOMBI_CONFIG.SUPABASE_URL + '/rest/v1/device_settings?select=target_c', {
@@ -212,7 +451,7 @@ await sleep(4000);
                  Authorization: 'Bearer ' + JSON.parse(localStorage.getItem('kombi-auth')).access_token }});
     return JSON.stringify(await r.json());
   })()`));
-  check("D6b veritabaninda da degisti", Number(st[0]?.target_c) === Number(after), JSON.stringify(st));
+  check("D6b veritabaninda da degisti", Number(st[0]?.target_c) === say(after), JSON.stringify(st));
 }
 
 // --- 5b) SEMA KISITI: "evde yokken 5-6 °C" yolu acik mi? -------------------
@@ -237,8 +476,8 @@ await sleep(4000);
     });
   })()`));
   check(`D17 hedef sayacinin tabani donma esiginden turuyor (${basFreeze} -> ${basFreeze + 0.5}) ve sirasi anlatiliyor`,
-    Number(a.sayac) === a.taban && a.taban === basFreeze + 0.5 && a.uyariGorunur &&
-    /donma esigi/i.test(a.uyari) && !/violates|constraint|new row|Failing row/i.test(a.uyari),
+    say(a.sayac) === a.taban && a.taban === basFreeze + 0.5 && a.uyariGorunur &&
+    /donma eşiği/i.test(a.uyari) && !/violates|constraint|new row|Failing row/i.test(a.uyari),
     JSON.stringify(a));
 
   // (b) REDDEDILEN YOL: gercek PATCH -> gercek 23514. Sayac artik bu degeri
@@ -253,7 +492,7 @@ await sleep(4000);
     dbTarget: null
   })`));
   check("D18 kisit hatasi (23514) TURKCE ve eyleme donuk; ham Postgres metni ekranda YOK",
-    b.gorunur && /donma esigi/i.test(b.metin) && /donma esigini dusur/i.test(b.metin) &&
+    b.gorunur && /donma eşiği/i.test(b.metin) && /donma eşiğini düşür/i.test(b.metin) &&
     !/violates|check constraint|new row|Failing row|device_settings_/i.test(b.metin),
     JSON.stringify(b));
 
@@ -279,7 +518,7 @@ await sleep(4000);
   })()`));
   check("D19 donma esigi 5,0'a cekilince hedef 5,5 VERITABANINA yaziliyor (yol tikali degil)",
     Number(c.db.target_c) === 5.5 && Number(c.db.freeze_guard_c) === 5 &&
-    Number(c.sayac) === 5.5 && c.hataGorunur === false, JSON.stringify(c));
+    say(c.sayac) === 5.5 && c.hataGorunur === false, JSON.stringify(c));
 
   // Kalan olcumler icin baslangic durumuna DON. Sira onemli: once hedef
   // yukseltilir, sonra donma esigi — tersi ayni kisitla reddedilir.
@@ -348,7 +587,7 @@ await sleep(4000);
     const sayacCalisiyor = eklenen === 1;
     eklenen = 0;
     // 10 kez yeniden ciz (panelin 2,5 dakikalik yoklamasina esdeger).
-    for (let i = 0; i < 10; i++) renderChart(lastRows, settings);
+    for (let i = 0; i < 10; i++) renderChart();
     const sonuc = { sayacCalisiyor, onCizimdeEklenen: eklenen,
                     cizgiVar: !!svg.querySelector('path') };
     svg.addEventListener = asil;
@@ -390,11 +629,11 @@ const enjeksiyonBasi = cdp.events.length;
     hataGorunur: !document.getElementById('load-err').classList.contains('hidden'),
     hataMetni: document.getElementById('load-err').textContent.slice(0, 100),
     sicaklikKorundu: document.getElementById('temp').textContent,
-    bosDurumMetniYok: !document.getElementById('seen').textContent.includes('henuz hic baglanmadi')
+    bosDurumMetniYok: !document.getElementById('seen').textContent.includes('henüz hiç bağlanmadı')
   })`);
   const o = JSON.parse(v);
   check("D14 (Y6) sorgu hatasi KULLANICIYA gosteriliyor ve bos durumla karistirilmiyor",
-    kesilen > 0 && o.hataGorunur && /okunamadi/i.test(o.hataMetni) && o.bosDurumMetniYok,
+    kesilen > 0 && o.hataGorunur && /okunamadı/i.test(o.hataMetni) && o.bosDurumMetniYok,
     `kesilen=${kesilen} ${v}`);
 }
 // Hata gecince uyari KALKIYOR (yapiskan hata mesaji yok) — ayni eksen, hata yok.
@@ -406,7 +645,7 @@ const enjeksiyonBasi = cdp.events.length;
     temp: document.getElementById('temp').textContent
   })`);
   const o = JSON.parse(v);
-  check("D15 (Y6) sorgu duzelince hata uyarisi kalkiyor", o.hataGizli && o.temp === "20.4", v);
+  check("D15 (Y6) sorgu duzelince hata uyarisi kalkiyor", o.hataGizli && say(o.temp) === 20.4, v);
 }
 
 // --- 8d) ORTA-4: HESAPLAR ARASI YARIS HALI --------------------------------
@@ -481,11 +720,12 @@ await sleep(4500);
     grafikBosUyari: !document.getElementById('chart-empty').classList.contains('hidden'),
     kuralBosUyari: !document.getElementById('rules-empty').classList.contains('hidden'),
     sahteSayiVar: /\\d+[.,]\\d\\s*°C/.test(document.getElementById('app').innerText),
+    desenCalisiyor: /\\d+[.,]\\d\\s*°C/.test('ornek 21,6 °C metni'),
     panelMetni: document.getElementById('app').innerText.replace(/\\s+/g,' ').slice(0,260)
   })`);
   const o = JSON.parse(v);
-  check("D10 bos durum: hicbir yerde uydurma/ornek deger YOK, aciklama var",
-    o.temp === "—" && o.nem === "—" && o.hedefTile === "—" && o.hedefKontrol === "—" &&
+  check("D10 bos durum: hicbir yerde uydurma/ornek deger YOK, aciklama var (desen kalibre)",
+    o.desenCalisiyor && o.temp === "—" && o.nem === "—" && o.hedefTile === "—" && o.hedefKontrol === "—" &&
     o.grafikBosUyari && o.kuralBosUyari && o.sahteSayiVar === false, v);
   await shot("panel-3-bos-durum");
 }

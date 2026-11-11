@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kombi Kontrol</title>
-<meta name="description" content="Evdeki kombinin oda sicakligini izleme ve hedef/senaryo ayarlari.">
+<meta name="description" content="Evdeki kombinin oda sıcaklığını izleme ve hedef/senaryo ayarları.">
 <meta name="color-scheme" content="light dark">
 <style>
   /* Renk rolleri tek yerde; aydinlik/karanlik burada takas edilir.
@@ -17,7 +17,11 @@
     --surface: #fcfcfb;
     --text: #0b0b0b;
     --text-2: #52514e;
-    --muted: #898781;
+    /* Aydinlik moddaki eski deger --surface uzerinde 3,50:1 idi, yani 11-13 px
+       metin icin AA'nin (4,5:1) ALTINDA; asagidaki deger 4,87:1. KARANLIK
+       moddaki --muted DEGISMEDI, orada zaten 4,85:1. (Eski rengi buraya
+       birebir yazmiyorum: ham renk sayimi yorumdaki metni de sayiyor.) */
+    --muted: #726f6a;
     --grid: #e1e0d9;
     --axis: #c3c2b7;
     --border: rgba(11, 11, 11, 0.10);
@@ -81,7 +85,7 @@
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-top: 16px; }
   .tile { border-top: 1px solid var(--grid); padding-top: 8px; }
   .tile .k { font-size: 12px; color: var(--muted); }
-  .tile .v { font-size: 17px; font-weight: 600; margin-top: 2px; }
+  .tile .v { font-size: 17px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
   .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -111,6 +115,11 @@
   #chart { width: 100%; height: 240px; display: block; touch-action: pan-y; }
   .legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-2); margin-top: 4px; flex-wrap: wrap; }
   .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: 2px; margin-right: 6px; }
+  .legend i.band { height: 10px; border-radius: 2px; vertical-align: -1px; }
+  /* "Sicaklik okunamadi" isareti grafikte dolgusuz + kesikli kenarli ciziliyor;
+     gostergedeki ornek de oyle (yeni renk/token YOK). */
+  .legend i.dashed { background: none; border-left: 1px dashed var(--axis); border-right: 1px dashed var(--axis); }
+  .explain { font-size: 12px; color: var(--text-2); margin-top: 10px; line-height: 1.45; }
   .tooltip {
     position: absolute; pointer-events: none; background: var(--surface);
     border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px;
@@ -120,7 +129,23 @@
   .hidden { display: none !important; }
   details summary { cursor: pointer; font-size: 14px; color: var(--text-2); font-weight: 600; }
   details[open] summary { margin-bottom: 12px; }
-  @media (max-width: 420px) { .hero-num { font-size: 40px; } }
+  /* --- "Kombi ne kadar yandi" karti --------------------------------------
+     "0 dk" bir OLCUMDUR: .burn-num kendi rengini tanimlamaz, govdenin
+     --text'ini miras alir (soluklasmaz). Soluk olan yalniz .unknown ("—",
+     bilinmiyor). Bos on ek / bos sayi `display:none` olur, yoksa geride
+     8 px'lik hayalet girinti kaliyor. */
+  .burn-lead { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+  .burn-pre { font-size: 15px; color: var(--text-2); }
+  .burn-pre:empty, .burn-num:empty { display: none; }
+  .burn-num { font-size: 28px; font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .burn-tail { font-size: 15px; color: var(--text-2); }
+  .burn-sub { font-size: 13px; color: var(--text-2); margin-top: 6px; }
+  /* Var olan .tiles (auto-fit minmax 130px) KULLANILMIYOR: 500 px'te 3+1
+     kiriliyor ve kart bozuk gorunuyordu (mockup'ta olculdu). */
+  .burn-tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 16px; margin-top: 16px; }
+  @media (min-width: 560px) { .burn-tiles { grid-template-columns: repeat(4, 1fr); } }
+  .unknown { color: var(--muted); }
+  @media (max-width: 420px) { .hero-num { font-size: 40px; } .burn-num { font-size: 26px; } }
 </style>
 </head>
 <body>
@@ -130,12 +155,12 @@
       <h1>Kombi Kontrol</h1>
       <div class="sub" id="device-name">—</div>
     </div>
-    <button class="link" id="theme-toggle" type="button" aria-label="Temayi degistir">tema</button>
+    <button class="link" id="theme-toggle" type="button" aria-label="Temayı değiştir">tema</button>
   </header>
 
   <!-- GIRIS -->
   <section class="card" id="auth-card">
-    <h2>Giris</h2>
+    <h2>Giriş</h2>
     <!-- Sifre alani bir <form> icinde olmak zorunda: Chrome aksi halde
          "Password field is not contained in a form" uyarisi veriyor ve sifre
          yoneticileri alani dogru taniyamiyor (tarayici olcumunde yakalandi). -->
@@ -145,19 +170,19 @@
         <input id="email" name="email" type="email" autocomplete="username" inputmode="email">
       </div>
       <div style="margin-bottom:12px">
-        <label for="password">Sifre</label>
+        <label for="password">Şifre</label>
         <input id="password" name="password" type="password" autocomplete="current-password">
       </div>
-      <button class="primary" id="signin" type="submit">Giris yap</button>
+      <button class="primary" id="signin" type="submit">Giriş yap</button>
     </form>
     <div class="err hidden" id="auth-err"></div>
-    <p class="note">Oturum tarayicida saklanir; her acilista yeniden giris istemez.</p>
+    <p class="note">Oturum tarayıcıda saklanır; her açılışta yeniden giriş istemez.</p>
   </section>
 
   <!-- PANEL -->
   <main id="app" class="hidden">
     <section class="card">
-      <h2>Anlik durum</h2>
+      <h2>Anlık durum</h2>
       <div class="hero">
         <div><span class="hero-num" id="temp">—</span><span class="hero-unit"> °C</span></div>
         <div class="pill" id="relay-pill"><span class="dot" style="background:var(--muted)"></span><span id="relay-text">—</span></div>
@@ -175,40 +200,73 @@
       <div class="err hidden" id="load-err"></div>
     </section>
 
+    <!-- Kombinin yanma suresi. "Anlik durum"daki rozet TEKRAR EDILMEZ; bu kart
+         ayni bilgiyi ikinci bir mantikla hesaplamaz, uzerine SUREYI ekler.
+         Uc ayri hal birbirine karistirilmaz: "0 dk" bir olcumdur (tam guclu
+         metin), "—" yalniz bilinmiyor demektir, veri HIC yoksa kart tek
+         cumleye iner. Okuma hatasi bunlardan ayri, --critical ile gosterilir.
+         Hicbir ogesi etkilesimli degil; aria-live KOYULMADI (deger 15 sn'de
+         bir yenileniyor, ekran okuyucuya "36 dk, 37 dk" okutmanin bedeli
+         faydasindan buyuk). -->
+    <section class="card" id="burn-card">
+      <h2>Kombi ne kadar yandı</h2>
+      <div id="burn-body">
+        <div class="pill"><span class="dot" id="burn-dot"></span><span id="burn-pill-text"></span></div>
+        <div class="burn-lead">
+          <span class="burn-pre" id="burn-pre"></span><span class="burn-num" id="burn-num"></span><span class="burn-tail" id="burn-tail"></span>
+        </div>
+        <div class="burn-sub" id="burn-sub"></div>
+        <div class="burn-tiles" id="burn-tiles"></div>
+        <div class="note" id="burn-note"></div>
+      </div>
+      <div class="empty hidden" id="burn-empty">Kombinin yanma süresi için henüz veri yok. Cihaz bağlandığında burada birikir.</div>
+      <div class="err hidden" id="burn-err"></div>
+    </section>
+
     <section class="card">
-      <h2>Hedef sicaklik</h2>
+      <h2>Hedef sıcaklık</h2>
       <div class="row">
-        <button class="step" id="t-minus" type="button" aria-label="Hedefi dusur">−</button>
+        <button class="step" id="t-minus" type="button" aria-label="Hedefi düşür">−</button>
         <div class="target-val"><span id="target-val">—</span> °C</div>
-        <button class="step" id="t-plus" type="button" aria-label="Hedefi yukselt">+</button>
+        <button class="step" id="t-plus" type="button" aria-label="Hedefi yükselt">+</button>
         <button class="primary" id="t-save" type="button">Kaydet</button>
       </div>
-      <p class="note">Cihaz ayari en gec 30 saniyede indirir. Karar cihazda verilir; internet kesilse de termostat calisir.</p>
+      <p class="note">Cihaz ayarı en geç 30 saniyede indirir. Karar cihazda verilir; internet kesilse de termostat çalışır.</p>
       <div class="err hidden" id="t-err"></div>
     </section>
 
     <section class="card">
-      <h2>Sicaklik gecmisi</h2>
+      <h2>Sıcaklık geçmişi</h2>
       <div class="chartbox">
-        <svg id="chart" role="img" aria-labelledby="chart-title"><title id="chart-title">Oda sicakligi, son 24 saat</title></svg>
+        <svg id="chart" role="img" aria-labelledby="chart-title"><title id="chart-title">Oda sıcaklığı, hedef ve kombinin karar aralığı — son 24 saat</title></svg>
         <div class="tooltip" id="tip"></div>
       </div>
-      <div class="legend">
-        <span><i style="background:var(--series-1)"></i>Oda sicakligi</span>
-        <span><i style="background:var(--series-2)"></i>Isitma acik</span>
-        <span><i style="background:var(--muted)"></i>Hedef</span>
+      <!-- Yakma/sondurme sayilari grafigin ICINE etiket olarak yazilmaz
+           (telefonda uc sag-kenar etiketi cakisiyor); gostergeye ve altindaki
+           cumleye tasinir. Metinleri app.js yazar; veri yokken ikisi de gizlenir. -->
+      <div class="legend hidden" id="chart-legend">
+        <span><i style="background:var(--series-1)"></i>Oda sıcaklığı</span>
+        <span><i style="background:var(--series-2)"></i>Kombi yandı</span>
+        <span><i style="background:var(--muted)"></i><span id="lg-target">Hedef</span></span>
+        <span><i class="band" style="background:var(--muted);opacity:.28"></i><span id="lg-band">Karar aralığı</span></span>
+        <!-- Son iki kalem yalnız karşılığı çizildiyse görünür (app.js). İki
+             AYRI olgu: cihaz hiç kayıt göndermemiş · kayıt var ama sensör
+             sıcaklığı okuyamamış. -->
+        <span class="hidden" id="lg-gap"><i class="band" style="background:var(--grid)"></i>Kayıt yok</span>
+        <span class="hidden" id="lg-sensor"><i class="band dashed"></i>Sıcaklık okunamadı</span>
       </div>
-      <div class="empty hidden" id="chart-empty">Henuz kayitli veri yok. Cihaz baglandiginda gecmis burada birikir.</div>
+      <p class="explain hidden" id="explain"></p>
+      <div class="empty hidden" id="chart-empty">Henüz kayıtlı veri yok. Cihaz bağlandığında geçmiş burada birikir.</div>
       <details style="margin-top:12px">
-        <summary>Veriyi tablo olarak gor</summary>
-        <table id="data-table"><thead><tr><th>Saat</th><th class="num">°C</th><th class="num">Nem</th><th>Isitma</th></tr></thead><tbody></tbody></table>
+        <summary>Veriyi tablo olarak gör</summary>
+        <table id="data-table"><thead><tr><th>Saat</th><th class="num">°C</th><th class="num">Hedef</th><th class="num">Nem</th><th>Kombi</th></tr></thead><tbody></tbody></table>
       </details>
     </section>
 
     <section class="card">
       <h2>Saatli senaryolar</h2>
-      <table id="rules"><thead><tr><th>Gunler</th><th class="num">Saat</th><th class="num">Hedef</th><th></th></tr></thead><tbody></tbody></table>
-      <div class="empty hidden" id="rules-empty">Kural yok. Termostat yalniz hedef sicaklikla calisir.</div>
+      <table id="rules"><thead><tr><th>Günler</th><th class="num">Saat</th><th class="num">Hedef</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="empty hidden" id="rules-empty">Kural yok. Termostat yalnız hedef sıcaklıkla çalışır.</div>
       <details style="margin-top:12px">
         <summary>Yeni kural ekle</summary>
         <div class="grid2">
@@ -217,11 +275,11 @@
           <div><label for="r-target">Hedef °C</label><input id="r-target" type="number" min="5" max="30" step="0.5" value="22" inputmode="decimal"></div>
         </div>
         <div style="margin-top:12px">
-          <label>Gunler</label>
+          <label>Günler</label>
           <div class="row" id="r-days"></div>
         </div>
         <div class="row" style="margin-top:12px">
-          <button class="primary" id="r-add" type="button">Kurali ekle</button>
+          <button class="primary" id="r-add" type="button">Kuralı ekle</button>
         </div>
         <div class="err hidden" id="r-err"></div>
       </details>
@@ -229,32 +287,32 @@
 
     <section class="card">
       <details>
-        <summary>Ileri ayarlar</summary>
+        <summary>İleri ayarlar</summary>
         <div class="grid2" style="margin-top:12px">
-          <div><label for="s-band">Salinim bandi °C</label><input id="s-band" type="number" min="2" max="6" step="0.5"></div>
-          <div><label for="s-freeze">Donma esigi °C</label><input id="s-freeze" type="number" min="4" max="12" step="0.5"></div>
-          <div><label for="s-hold">Role asgari bekleme (sn)</label><input id="s-hold" type="number" min="0" max="1800" step="30"></div>
-          <div><label for="s-manual">Manuel mod (senaryolari durdur)</label>
-            <select id="s-manual"><option value="false">Kapali</option><option value="true">Acik</option></select></div>
+          <div><label for="s-band">Salınım bandı °C</label><input id="s-band" type="number" min="2" max="6" step="0.5"></div>
+          <div><label for="s-freeze">Donma eşiği °C</label><input id="s-freeze" type="number" min="4" max="12" step="0.5"></div>
+          <div><label for="s-hold">Röle asgari bekleme (sn)</label><input id="s-hold" type="number" min="0" max="1800" step="30"></div>
+          <div><label for="s-manual">Manuel mod (senaryoları durdur)</label>
+            <select id="s-manual"><option value="false">Kapalı</option><option value="true">Açık</option></select></div>
         </div>
-        <div class="row" style="margin-top:12px"><button class="primary" id="s-save" type="button">Ileri ayarlari kaydet</button></div>
-        <p class="note">Bant DHT11 sensorunun 1 °C cozunurlugune gore 3 °C secildi; alt sinir 2 °C
-        (daha dari bu sensorle olculemez, role salinir). Sensor degisince daraltilabilir.
-        Donma esigi hedefin en az 0,5 °C altinda olmak zorunda.</p>
+        <div class="row" style="margin-top:12px"><button class="primary" id="s-save" type="button">İleri ayarları kaydet</button></div>
+        <p class="note">Bant DHT11 sensörünün 1 °C çözünürlüğüne göre 3 °C seçildi; alt sınır 2 °C
+        (daha darı bu sensörle ölçülemez, röle salınır). Sensör değişince daraltılabilir.
+        Donma eşiği hedefin en az 0,5 °C altında olmak zorunda.</p>
         <div class="err hidden" id="s-err"></div>
       </details>
     </section>
 
     <div class="row" style="margin: 4px 0 32px">
-      <button id="signout" type="button">Cikis</button>
+      <button id="signout" type="button">Çıkış</button>
       <span class="note" id="poll-note"></span>
     </div>
   </main>
 
   <section class="card hidden" id="config-missing">
-    <h2>Yapilandirma eksik</h2>
-    <p class="sub">`dashboard/config.js` dosyasi yok ya da bos. `config.example.js`'i kopyalayip
-    Supabase adresi ve anon anahtarini girin.</p>
+    <h2>Yapılandırma eksik</h2>
+    <p class="sub">`dashboard/config.js` dosyası yok ya da boş. `config.example.js`'i kopyalayıp
+    Supabase adresi ve anon anahtarını girin.</p>
   </section>
 </div>
 

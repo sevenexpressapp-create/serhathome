@@ -39,19 +39,61 @@ await post("device_state", {
 await post("scenario_rules", { device_id: D, days_mask: 62, hour: 7, minute: 0, target_c: 22 });
 await post("scenario_rules", { device_id: D, days_mask: 127, hour: 23, minute: 0, target_c: 18 });
 
-const rows = [];
-let temp = 19.5, heat = true;
+// --- telemetri: URUNUN GERCEK RITMI + iki bilincli uc hal -------------------
+// Eskiden tohum 5 DAKIKADA bir satir yaziyordu; kartin kurali ise "bir satir =
+// bir kadans kadar yanma". Kadans artik veriden olculuyor ama tohumun uretimle
+// ayni ritimde olmasi sart: panel testi kartin gercekte gorecegi seriyi
+// olcmeli. Cihaz 60 sn'de bir yaziyor (device-sync TELEMETRY_MIN_GAP_MS).
+//
+// Iki uc hal BILEREK konuldu, ikisi de panel testinde olculuyor:
+//   · 90 dakikalik KAYIT BOSLUGU (cihaz susmus) — serit bunu koprulememeli
+//   · yanan bir dizinin ORTASINDA iki satirlik `temp_c = null` (DHT11'de
+//     olagan) — kayit VAR, yalniz sicaklik okunamamis; yanma BOLUNMEMELI
+const KADANS_MS = 60e3;
+const PENCERE_DK = 24 * 60;
+const BOSLUK_BAS_DK = 9 * 60;      // simdiden 9 saat once basliyor
+const BOSLUK_SURE_DK = 90;
+const SENSOR_BOS_DK = 3 * 60;      // simdiden 3 saat once, iki satir
 const now = Date.now();
-for (let i = 288; i >= 0; i--) {
-  if (heat) { temp += 0.11; if (temp >= 23.0) heat = false; } else { temp -= 0.07; if (temp <= 20.0) heat = true; }
-  rows.push({ device_id: D, ts: new Date(now - i * 5 * 60e3).toISOString(), temp_c: Math.round(temp * 10) / 10, humidity: 52 + (i % 7), relay_on: heat, target_c: 25.0 });
+const rows = [];
+let temp = 21.4, heat = true;
+for (let i = PENCERE_DK; i >= 0; i--) {
+  const t = now - i * KADANS_MS;
+  // Histerezis: yakma 23,5 / sondurme 26,5 (hedef 25,0 · bant 3,0) yerine
+  // tohumun kendi dar salinimi korunuyor; onemli olan fiziksel tutarlilik.
+  if (heat) { temp += 0.03; if (temp >= 23.0) heat = false; }
+  else { temp -= 0.02; if (temp <= 20.0) heat = true; }
+  if (i <= BOSLUK_BAS_DK && i > BOSLUK_BAS_DK - BOSLUK_SURE_DK) continue;   // KAYIT YOK
+  const sensorBos = i <= SENSOR_BOS_DK && i > SENSOR_BOS_DK - 2;
+  if (sensorBos) heat = true;      // bosluk yanan bir dizinin ORTASINDA olsun
+  rows.push({
+    device_id: D, ts: new Date(t).toISOString(),
+    temp_c: sensorBos ? null : Math.round(temp * 10) / 10,
+    humidity: sensorBos ? null : 52 + (i % 7),
+    relay_on: heat, target_c: 25.0,
+  });
 }
-await post("telemetry", rows);
+// Son satir YANIK olsun: `device_state.relay_on = true` ile tutarli ve kartin
+// "su an X dk yaniyor" dali olculebilir kalsin.
+for (let k = rows.length - 12; k < rows.length; k++) rows[k].relay_on = true;
+
+// Tohum IDEMPOTENT: eski kosumun satirlari ustune binmesin (yerel yigin).
+await fetch(`${st.API_URL}/rest/v1/telemetry?device_id=eq.${D}&ts=gte.${new Date(now - 26 * 3600e3).toISOString()}`,
+  { method: "DELETE", headers: { ...H, Prefer: "return=minimal" } });
+for (let i = 0; i < rows.length; i += 500) await post("telemetry", rows.slice(i, i + 500));
 
 // 2) BOS hesap — "veri yokken uydurma deger gosterilmiyor" testi icin
 const uid2 = await user("bos@kombi.test", "Kombi-Bos-2026!x");
 await post("devices", { id: "kombi-bos", owner_id: uid2, name: "Yeni kombi", secret_sha256: createHash("sha256").update("bos").digest("hex") }, true);
 
+// Panel testi bu sayilari bagimsiz dogrulama tarafi olarak kullanabilsin.
+const yanan = rows.filter((r) => r.relay_on).length;
+const gece = new Date(); gece.setHours(0, 0, 0, 0);
+console.log(JSON.stringify({
+  satir: rows.length, yanan,
+  bugunYanan: rows.filter((r) => r.relay_on && Date.parse(r.ts) >= gece.getTime()).length,
+  kayitBoslugu_dk: BOSLUK_SURE_DK, sensorBosSatir: rows.filter((r) => r.temp_c === null).length,
+}));
 console.log("tohum veri hazir: panel@kombi.test (dolu) + bos@kombi.test (bos)");
 console.log("NOT: parolalar auth politikasina gore (>=12 krk + karmasiklik) guncellendi;");
 console.log("     tests/panel_test.mjs ayni degerleri kullanir.");
