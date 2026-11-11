@@ -40,7 +40,7 @@ pio run -e esp32dev -t upload --upload-port /dev/cu.wchusbserial140
 # 3) Supabase (yerel)
 npx supabase start && npx supabase db reset
 KOMBI_MUTATE=1 node tests/rls_test.mjs   # RLS + mutasyon (yalnız YEREL)
-node tests/auth_policy_test.mjs          # kayıt kapalı mı, parola politikası tutuyor mu
+node tests/auth_policy_test.mjs          # kayıt/parola politikası + prune_telemetry yetkisi (7 ölçüm)
 npx supabase functions serve --no-verify-jwt
 node tests/device_sync_test.mjs          # cihaz kapısı
 

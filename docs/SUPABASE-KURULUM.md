@@ -24,9 +24,22 @@ npx supabase link --project-ref <PROJE_REF>
 npx supabase db push
 ```
 
-`db push` yalnız `supabase/migrations/` altındaki tek dosyayı uygular:
-tablolar, RLS politikaları, çakışan kural tetikleyicisi, `device_health` görünümü
-ve `anon` yetkisinin geri alınması.
+`db push` `supabase/migrations/` altındaki **üç** dosyayı sırayla uygular
+(11.11.2026 itibarıyla — eskiden tek dosyaydı):
+
+| Dosya | Ne yapar |
+|---|---|
+| `20261014090000_kombi_init.sql` | tablolar, RLS politikaları, çakışan kural tetikleyicisi, `device_health` görünümü, `anon` yetkisinin geri alınması |
+| `20261111180000_telemetri_budama_cron.sql` | `pg_cron` + günlük budama zamanlaması (00:17 UTC = 03:17 TRT) |
+| `20261111211500_prune_telemetry_yetki_duzeltme.sql` | KRİTİK-1: `prune_telemetry` EXECUTE yetkisini `authenticated`'dan geri alır |
+
+✅ Üçü de **canlıda** (11.11.2026 — Serhat Bey SQL editöründen uyguladı, defter
+satırları bloklarla birlikte elle eklendi). Uygulama sonrası ölçüldü:
+`supabase_migrations.schema_migrations` **3 satır**; `cron.job` tek satır
+(`jobid=1`, `kombi-telemetri-buda`, `17 0 * * *`, `username=postgres`,
+`active=true`); `pg_cron 1.6.4` kurulu; `prune_telemetry` ACL'i
+`{postgres=X/postgres,service_role=X/postgres}` ve
+`has_function_privilege('authenticated', …, 'EXECUTE') = false`.
 
 ## 3. Edge Function
 
@@ -145,7 +158,9 @@ geçerse saldırgan hedefi 30 °C'de tutabilir, kuralları yeniden yazabilir, do
 korumasını sabote edebilir.
 
 `supabase/config.toml` içindeki ayarlar düzeltildi ve **yerel yığında ölçüldü**
-(`node tests/auth_policy_test.mjs` → 5/5). CLI ile bulut projesine basmak için:
+(`node tests/auth_policy_test.mjs` → kimlik ölçümleri S1-S5 **5/5**; aynı dosya
+11.11.2026'dan beri S6/S7 ile fonksiyon yetkisini de ölçüyor, §7.5). CLI ile
+bulut projesine basmak için:
 
 ```
 npx supabase link --project-ref <PROJE_REF>
@@ -221,8 +236,14 @@ ikinci adımı. Ev ısıtmasını kontrol eden bir hesap için:
 SUPABASE_URL=https://<REF>.supabase.co ANON_KEY=<anon> SERVICE_KEY=<service> \
 node tests/auth_policy_test.mjs
 ```
-Beş ölçümün beşi de geçmeli. S5 ("geçerli kullanıcı giriş yapabiliyor")
-geçmiyorsa 7.2'deki uyarıya dönün: e-posta sağlayıcısı kapanmış olabilir.
+**Yedi** ölçümün yedisi de geçmeli (11.11.2026'da S6+S7 eklendi; eskiden beşti).
+S5 ("geçerli kullanıcı giriş yapabiliyor") geçmiyorsa 7.2'deki uyarıya dönün:
+e-posta sağlayıcısı kapanmış olabilir.
+**S6** ("panel kullanıcısı `prune_telemetry`'yi çağıramaz") canlıda şu an
+**KALIR** — düzeltme göçü (`20261111211500_prune_telemetry_yetki_duzeltme.sql`)
+uygulanınca geçer. S6 zararsız tasarlandı: 36500 günlük tutma penceresiyle
+çağırır, yani yetki açık olsa bile **hiçbir satır silinmez** (ölçüldü: yerelde
+yetki açıkken çağrı geçti, silinen satır 0, telemetri 3647 → 3647).
 
 ## 8. Faz 2'ye bırakılanlar
 
@@ -232,5 +253,60 @@ geçmiyorsa 7.2'deki uyarıya dönün: e-posta sağlayıcısı kapanmış olabil
 - `pg_cron` ile "cihaz sustu / donma riski" kontrolü ve Telegram alarmı
   (veri kaynağı hazır: `public.device_health` görünümü). ⚠️ `events` tablosunun
   üreticisi yok — `docs/FAZ2-GUVENLIK-KALEMLERI.md` O2.
-- `pg_cron` ile telemetri budama: `select public.prune_telemetry(30)`
 - Kalan güvenlik kalemleri: `docs/FAZ2-GUVENLIK-KALEMLERI.md`
+
+### 8.1 `pg_cron` ile telemetri budama — uygulama bloğu (11.11.2026)
+
+Göç dosyası yazıldı: `supabase/migrations/20261111180000_telemetri_budama_cron.sql`
+(gerekçeler dosyanın başındaki yorumda). ✅ **11.11.2026'da canlıya uygulandı**
+— aşağıdaki **B** yolu kullanıldı. Blok yeniden koşulabilir: `cron.schedule`
+aynı `(jobname, username)` üzerine yazar, defter satırını `where not exists`
+korur.
+
+İki yol var, ikisinden **birini** seçin:
+
+**A) `npx supabase db push`** — defter satırını CLI kendisi yazar, elle bir şey
+gerekmez. (Depo bağlıysa en temizi.)
+
+**B) Supabase SQL editörü** — ⚠️ SQL editöründen koşan ifade
+`supabase_migrations.schema_migrations`'a satır **yazmaz**; defter satırı elle
+eklenmezse depo ile canlı ayrışır (bir sonraki `db push` göçü ikinci kez
+uygulamaya çalışır). Aşağıdaki blok ifadeyi **ve** defter satırını birlikte
+koşar. Defter tablosunun kolonları ölçüldü (canlı + yerel): `version`,
+`statements`, `name` — başka kolon yok (`inserted_at` **yok**); `version`
+birincil anahtar (`schema_migrations_pkey PRIMARY KEY (version)`, yerelde
+ölçüldü). `statements` NULL olabilir (ölçüldü), o yüzden bloğa yazılmıyor.
+ℹ️ `name` kolonu kozmetik ve iki ortamda **farklı** doldurulmuş (CLI sürümü
+farkı): canlıda `20261014090000_kombi_init`, yerelde `kombi_init`. Aşağıdaki
+blok canlıdaki biçimi izler. Eşleştirme `version` üzerinden yapılır.
+
+```sql
+-- 1) pg_cron + gunluk budama (00:17 UTC = 03:17 TRT)
+create extension if not exists pg_cron with schema pg_catalog;
+
+select cron.schedule(
+  'kombi-telemetri-buda',
+  '17 0 * * *',
+  $cmd$select public.prune_telemetry(30)$cmd$
+);
+
+-- 2) GOC DEFTERI: SQL editoru bu satiri KENDISI yazmaz.
+--    `where not exists` kullanildi (on conflict yerine): `version` birincil
+--    anahtar olsa da defterin kolon/kisit yapisi Supabase'in kendi tablosu ve
+--    surumle degisebilir; bu bicim kisit adi/turu ne olursa olsun calisir.
+insert into supabase_migrations.schema_migrations (version, name)
+select '20261111180000', '20261111180000_telemetri_budama_cron'
+where not exists (
+  select 1 from supabase_migrations.schema_migrations
+  where version = '20261111180000'
+);
+
+-- 3) DOGRULAMA (beyan degil olcum) — iki satir donmeli
+select jobid, jobname, schedule, username, command from cron.job
+where jobname = 'kombi-telemetri-buda';
+select version, name from supabase_migrations.schema_migrations order by version;
+```
+
+Geri alma: `select cron.unschedule(jobid) from cron.job where jobname = 'kombi-telemetri-buda';`
+(+ defter satırını silmek isterseniz
+`delete from supabase_migrations.schema_migrations where version = '20261111180000';`)

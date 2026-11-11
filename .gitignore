@@ -40,3 +40,13 @@ tests/out/
 # Depo herkese acik; denetim turlarinin ekran goruntuleri yerelde kalir.
 # Tasarim spec'i (docs/TASARIM-*.md) ve docs/mockup/ TAKIPTE kalir.
 docs/denetim-*/
+
+# --- Panel ekran goruntuleri (depo KOKUNDE) ---
+# YUKSEK-4 (denetim 11.11.2026): depo herkese acik ve bu goruntuler Serhat
+# Bey'in EVINE ait veri gosteriyor — `panel-2-mobil.png` senaryo saatlerini
+# (evde/dista/gece duzeni) ve sicaklik gecmisini okunabilir halde iceriyor.
+# Yani "ev bos" saatleri goruntuden cikarilabilir. Dosyalar SILINMEDI/TASINMADI,
+# yalniz izlemeye alinmiyor. Paylasilacak bir ekran goruntusu gerekirse once
+# verisi temizlenmis bir ornekle uretin (bkz. tests/seed_demo.mjs).
+# Kok kurali: yalniz depo kokundeki panel-*.png. docs/mockup/ etkilenmez.
+/panel-*.png

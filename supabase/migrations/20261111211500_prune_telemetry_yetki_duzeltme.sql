@@ -1,0 +1,49 @@
+-- KRITIK-1 (denetim 11.11.2026) — `public.prune_telemetry(integer)` YETKISI.
+-- Panel kullanicisi (`authenticated`) bu fonksiyonu CAGIRABILIYOR. Yani calinmis
+-- ya da ele gecirilmis bir panel oturumu `prune_telemetry(1)` cagirip 1 gunden
+-- eski TUM telemetriyi silebilir. RLS burada korumuyor: fonksiyon
+-- `security definer` ve `delete` islemi fonksiyonun icinde, sahibinin (postgres)
+-- hakkiyla kosuyor — tek kapi EXECUTE yetkisi.
+--
+-- ⚠️ YANLIS YORUMUN DUZELTMESI: 20261014090000_kombi_init.sql:166'daki
+--     "Yalniz service_role/cron cagirir; panel kullanicisi veri SILEMEZ"
+--   yorumu YANLISTI. Bu goc o iddiayi gecerli kilar. O satir DEGISTIRILMEDI,
+--   cunku kombi_init UYGULANMIS bir goctur (hem canlida hem yerel yiginda
+--   `supabase_migrations.schema_migrations`'da kayitli: version=20261014090000)
+--   — uygulanmis gocun metni duzeltilmez, duzeltme yeni dosyada yapilir.
+--
+-- NEDEN ACIK KALDI: `kombi_init.sql:165`'teki
+--     revoke all on function public.prune_telemetry(integer) from public;
+--   YALNIZ `PUBLIC` sozde-rolunu alir. Supabase'in `alter default privileges`
+--   ayari ise fonksiyon yaratilirken ACL'e ADLANDIRILMIS bir
+--   `authenticated=X/postgres` girdisi yazar; `revoke ... from public` o
+--   adlandirilmis girdiye DOKUNMAZ. Ikisi ayri kapi.
+--   OLCULDU 11.11.2026 — canli proje VE yerel yigin, ayni sonuc:
+--     proacl = {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+--     has_function_privilege('authenticated','public.prune_telemetry(integer)','EXECUTE') = true
+--     has_function_privilege('anon',        'public.prune_telemetry(integer)','EXECUTE') = false
+--   `anon`in KAPALI olmasinin sebebi bu satir degil, AYRI bir satir:
+--     kombi_init.sql:273  revoke all on all functions in schema public from anon;
+--   O satir fonksiyon tanimlarindan (kombi_init.sql:158-164) SONRA kostugu icin
+--   adlandirilmis `anon` girdisini de almis. Simetrik `authenticated` satiri
+--   hic yazilmamis: init'te `authenticated`dan geri alinan sey yalniz TABLOLAR
+--   (satir 280-282 ve 290). Iki kapidan biri eksik kalmis.
+--
+-- ETKI — HICBIR ISTEMCI KIRILMAZ:
+--   · Depoda `prune_telemetry`'yi cagiran istemci YOK: panel (dashboard/),
+--     Edge Function (supabase/functions/), cihaz yazilimi (firmware/), test
+--     takimi (tests/), tools/ ve supabase/snippets/ taramasinda 0 eslesme
+--     (olculdu 11.11.2026). Adi yalniz docs/ icinde ANLATIM olarak geciyor
+--     (SUPABASE-KURULUM.md:235, TASARIM-grafik...:219, FAZ2-...:20,25) —
+--     bunlar cagiran istemci degil, metin.
+--   · pg_cron isi kirilmaz: is `postgres` rolu olarak kosar (`cron.job.username`
+--     = postgres, olculdu) ve `postgres` fonksiyonun SAHIBI. Sahibin EXECUTE
+--     hakki ACL girdisinden degil SAHIPLIKTEN gelir; `revoke` onu etkilemez.
+--   · `service_role` girdisine DOKUNULMUYOR — yonetici/elle cagri acik kalir
+--     (budamayi elle tetiklemek gerekirse yol kapanmasin).
+--
+-- DOGRULAMASI: `node tests/auth_policy_test.mjs` icindeki S6 olcumu. S6 bu goc
+--   uygulanmadan KIRMIZI, uygulandiktan sonra YESIL (olcum PROGRESS.md'de).
+--
+-- ⚠️ CANLIYA HENUZ UYGULANMADI (11.11.2026). Serhat Bey onayina sunuldu.
+revoke all on function public.prune_telemetry(integer) from authenticated, anon, public;

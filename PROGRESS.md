@@ -6,6 +6,197 @@ neden). Ayrıntılı ölçümler `docs/FAZ1-TEST-SONUCLARI.md`'de.
 
 ---
 
+## 11.11.2026 (3. tur) — İKİ GÖÇ DE CANLIDA ✅
+
+Serhat Bey iki bloğu da Supabase SQL editöründen koştu (`docs/SUPABASE-KURULUM.md`
+§8.1). Aşağıdaki "uygulanmadı / kurulmadı" kayıtları **bu satırdan eskidir.**
+MCP bağlantısı hâlâ `--read-only`; ölçümler okuma sorgularıyla yapıldı.
+
+**Budama cron'u — `cron.job` tek satır:** `jobid=1`, `kombi-telemetri-buda`,
+`17 0 * * *`, `username=postgres`, `active=true`,
+`command = select public.prune_telemetry(30)`. `pg_cron 1.6.4` kurulu,
+`cron.timezone = GMT` → **03:17 TRT**.
+⚠️ `cron.job_run_details` **boş** — iş henüz koşmadı. İlk koşum **0 satır**
+silecek: 31.947 satır var, 30 günden eskisi **yok** (en eski 14.10). İlk gerçek
+silme ~13.11. **Yarın `status = succeeded` doğrulanmalı.**
+
+**KRİTİK-1 yetki düzeltmesi — kapandı.** Uygulama sonrası canlıdan ölçüldü:
+`proacl = {postgres=X/postgres,service_role=X/postgres}` (önce
+`authenticated=X/postgres` de vardı); `has_function_privilege`:
+`authenticated` **false**, `anon` **false**, `service_role` **true**,
+`postgres` **true**. Cron kırılmadı — `active` kaldı, EXECUTE sahiplikten
+geliyor.
+
+**Göç defteri:** `supabase_migrations.schema_migrations` **3 satır**
+(`20261014090000_kombi_init`, `20261111180000_telemetri_budama_cron`,
+`20261111211500_prune_telemetry_yetki_duzeltme`). Depo ile canlı hizalı; bir
+sonraki `db push` init'i ikinci kez uygulamaya çalışmaz.
+
+**Max rows 1000 → 2000 YAPILDI** (11.11.2026, Serhat Bey Supabase panelinden
+bildirdi). ⚠️ Bu ayar ne MCP'den ne REST'ten okunabiliyor (veritabanında
+durmuyor), yani **bizim ölçümümüz değil** — kaynağı Serhat Bey'in beyanı. Etkisi
+yalnız grafiğin 24 saati tam çizmesi; kart sayıları zaten tavandan bağımsız.
+Kadans 60 sn → 24 saat = 1.440 satır, yeni tavanın altında.
+
+**Hâlâ açık:** `cron.job_run_details` için **izleme yok** (sessiz kırılma
+riski) · girişte rate limit / captcha / MFA yok · S2 klemens gerilimi
+ölçülmedi.
+
+---
+
+## 11.11.2026 (2. tur) — Kod denetiminin kapanış BLOK'u kapatıldı (4 YÜKSEK + 1 KRİTİK)
+
+SQL'in kendisi ONAY almıştı; denetçi işin **kapanışını** bloke etti. Bu turda o
+kalemler kapandı. (Bu turun sonunda commit/push yoktu ve canlıya hiçbir şey
+uygulanmamıştı; **ikisi de 3. turda yapıldı** — yukarıdaki kayıt.)
+
+**KRİTİK-1 — `prune_telemetry` yetkisi → AYRI göç yazıldı.**
+`supabase/migrations/20261111211500_prune_telemetry_yetki_duzeltme.sql`:
+`revoke all on function public.prune_telemetry(integer) from authenticated, anon, public;`
+Kök sebep ölçüldü: `kombi_init.sql:165`'teki `revoke … from public` yalnız
+`PUBLIC` sözde-rolünü alıyor; Supabase'in `alter default privileges` ayarı ACL'e
+**adlandırılmış** `authenticated=X/postgres` girdisi yazıyor ve revoke ona
+dokunmuyor. `anon`'un kapalı olması ayrı bir satırın eseri (`kombi_init.sql:273`,
+fonksiyonlardan SONRA koşuyor); simetrik `authenticated` satırı hiç yazılmamış.
+`kombi_init.sql:166`'daki "panel kullanıcısı veri SİLEMEZ" yorumu **yanlıştı** —
+o satır **değiştirilmedi** (uygulanmış göç), yanlışlığı yeni göçün başlığında
+yazılı. Cron kırılmaz: iş `postgres` olarak koşar ve `postgres` fonksiyonun
+sahibi (EXECUTE sahiplikten gelir). Çağıran istemci yok (dashboard/firmware/
+tests/functions/tools/snippets taramasında **0 eşleşme**). ✅ **Canlıya
+11.11.2026'da uygulandı** — ölçüm 3. tur kaydında.
+
+**YÜKSEK-2 — gerilemeyi ölçen sınav eklendi.** `tests/auth_policy_test.mjs`
+artık **7 ölçüm** (S1-S5 kimlik + yeni S6 fonksiyon yetkisi + S7 pozitif
+kontrol). Ölçüm (yerel yığın, `authenticated=X` canlıyla **birebir aynı**):
+- Göç uygulanmadan: **6/7, S6 KALDI, çıkış kodu 1** (durum=200 → çağrı geçti).
+- Göç yerelde uygulandıktan sonra: **7/7, çıkış kodu 0**, S6 `durum=403 kod=42501`.
+- Yetkiyi elle geri verip gerileme taklit edildi → yine **6/7, çıkış kodu 1**
+  (yani kapı gerçekten kapı; sessiz geçmiyor).
+- `telemetry` satır sayısı üç koşumun hepsinde **3647 → 3647** (hiç silme yok).
+⚠️ **Tasarım kararı:** denetçi `p_keep_days: 1` önermişti — yetki açık kalırsa o
+çağrı gerçekten siler. Sınav **36500 gün** (100 yıl) kullanıyor: yetki açıkken
+çağrı geçse bile `ts < now()-36500g` hiçbir satır tutmaz, silme 0. Ölçüt **hata
+kodu** (42501), satır sayısı değil. Dosyada `KEEP_DAYS < 3650` olursa sınav
+çıkış kodu 2 ile DURUR (gelecekteki bir düzenleme bunu veri silen araca
+çevirmesin).
+⚠️ **Yerel-yığın kapısı BİLEREK eklenmedi** (kardeş testlerin aksine) — gerekçe
+aşağıda "Patron'a açık kalem".
+
+**YÜKSEK-1 + ORTA-7 — eskimiş metinler düzeltildi.**
+- `docs/FAZ2-GUVENLIK-KALEMLERI.md`: "yalnız service_role'e açık" ⚠️ ile
+  düzeltildi (ölçüm + yeni göçe atıf); "pg_cron kurulmadı (bulut projesi
+  açılmadı)" notu 11.11.2026 durumuna çevrildi; örnek SQL `'17 0 * * *'` oldu.
+- `docs/SUPABASE-KURULUM.md`: "`db push` tek dosyayı uygular" → **üç dosya**
+  tablosu; §7.5 "beş ölçüm" → **yedi**; yeni **§8.1** uygulama bloğu.
+- `dashboard/app.js`: yalnız **yorum** güncellendi (918-920 civarı). **Ekran
+  metnine dokunulmadı** — "30 günden eskisi bu ekranda gösterilmiyor" doğru.
+
+**YÜKSEK-4 — ev verisi depoya girmesin.** Kökteki `panel-1-giris.png`,
+`panel-2-mobil.png`, `panel-3-bos-durum.png` **silinmedi/taşınmadı**;
+`.gitignore`'a `/panel-*.png` kök kuralı gerekçesiyle eklendi. Ölçüm:
+`git check-ignore -v` üçünü de `.gitignore:52` ile eşledi, `git status --short`
+artık üçünü **göstermiyor**, `docs/mockup/*` **etkilenmedi**, `git log --all
+--diff-filter=A` taramasında geçmişte hiç commit edilmemiş (0 eşleşme).
+
+**YÜKSEK-3 — göç defteri.** SQL editöründen koşan ifade
+`supabase_migrations.schema_migrations`'a satır yazmıyor → depo/canlı ayrışır.
+§8.1'deki bloğa defter satırı eklendi. Kolonlar ölçüldü (canlı + yerel):
+`version`, `statements`, `name` (**`inserted_at` yok**); `version` birincil
+anahtar (`schema_migrations_pkey PRIMARY KEY (version)`, yerelde ölçüldü);
+`statements` NULL olabilir. Yine de `on conflict` yerine **`where not exists`**
+kullanıldı (kısıt adı/sürümü ne olursa olsun çalışır). Blok yerelde
+`begin … rollback` içinde sınandı: 1. insert 1 satır, 2. insert **0 satır**
+(idempotent), defter sonrasında eski hâline döndü. ℹ️ `name` kolonu iki ortamda
+farklı dolmuş (canlı `20261014090000_kombi_init`, yerel `kombi_init` — CLI
+sürüm farkı); blok canlının biçimini izliyor, eşleştirme `version` ile.
+
+**K1/K2/K3 (Patron'un kararları) uygulandı — göç yorumu yeniden yazıldı:**
+- **K1:** zamanlama `'17 3 * * *'` → **`'17 0 * * *'`** (00:17 UTC = **03:17
+  TRT**). Yorumda "dizge aynen korundu" iddiası kaldırıldı; yerine "dizge
+  DEĞİŞTİ, niyet (gece 03:17) korundu" yazıldı. Ölçüm: göç yerelde **2 ardışık
+  koşum, ikisi de çıkış kodu 0**; `cron.job` tek satır, `jobid=1` değişmedi,
+  `schedule='17 0 * * *'`, `username=postgres`, `active=t`.
+- **K2:** saklama **30 gün KALDI**. Gerekçe düzeltildi: bağlayıcı pencere
+  panelin **30 günlük sayım** penceresi (`dashboard/app.js:725` `iso30`,
+  sayımlar `app.js:753-754`, kaydın başlangıcı `app.js:759`) — 24 saatlik grafik
+  bunun alt kümesi. "Panelin sayım penceresi değişirse BU GÖÇ de değişmeli;
+  şu an tam tümleyen, PAY YOK" kaydı göçe yazıldı.
+- **K3:** idempotentlik `(jobname, username)` çiftine bağlı — yorum "aynı ROL
+  (postgres) ile çağrıldığında" diye nitelendi, başka rolle ikinci iş oluşacağı
+  yazıldı. Geri alma satırı güvenli biçime çevrildi:
+  `select cron.unschedule(jobid) from cron.job where jobname = 'kombi-telemetri-buda';`
+
+**🔴 Patron'a / Serhat Bey'e açık kalem (karar gerekiyor):** denetçi
+`tests/auth_policy_test.mjs`'e "hedef yerel değilse çıkış kodu 2" kapısı
+istemişti. **Eklenmedi** — ölçüm: bu dosyada öyle bir kapı hiç yoktu ve bu
+**bilinçli**: 14.10 denetiminin 2. turunda "sahte yeşil" dersiyle dosya BULUTA
+karşı koşacak biçimde düzeltilmişti (ortam değişkenleri hedefi eziyor) ve bulut
+koşumu üç yerde yazılı (`README.md:43`, `docs/SUPABASE-KURULUM.md` §6 ve §7.5).
+Üstelik S6'nın ölçtüğü **açık yetki canlı projede duruyor** — yerele kilitlemek,
+ölçülmesi gereken yeri ölçümsüz bırakırdı. Güvenlik bunun yerine çağrıyı
+zararsız kılarak sağlandı (36500 gün + `KEEP_DAYS` kapısı). Serhat Bey yine de
+sert kapı isterse eklenir, ama o zaman bulut doğrulaması kaybedilir.
+
+**Yerel yığının durumu (bilinsin):** iki göç de yerelde **uygulandı** (cron işi
+kurulu, `authenticated` yetkisi kapalı) ama **göç defterine yazılmadı** (kasten,
+rollback'li sınama). İkisi de idempotent olduğu için sonraki `db push` sorunsuz
+yeniden uygular.
+
+---
+
+## 11.11.2026 — Telemetri budama cron'u (O7): göç dosyası yazıldı (canlıya 3. turda uygulandı)
+
+Serhat Bey onayladı. **Yeni göç:** `supabase/migrations/20261111180000_telemetri_budama_cron.sql`
+(uygulanmış `20261014090000_kombi_init.sql` **ellenmedi** — git temiz; içindeki
+yorumlu öneri olduğu gibi bırakıldı, yeni dosya yazıldı).
+
+İçeriği iki satır: `create extension if not exists pg_cron with schema pg_catalog;`
++ `cron.schedule('kombi-telemetri-buda','17 3 * * *', select public.prune_telemetry(30))`.
+> ⚠️ **Bu dizge 2. turda DEĞİŞTİ** (yukarıdaki 11.11 2. tur kaydı): güncel hâli
+> `'17 0 * * *'` = 00:17 UTC = 03:17 TRT. Aşağıdaki "TR 06:17" ve `'17 3 * * *'`
+> ifadeleri **1. turun tarihsel kaydıdır**, uygulamaya esas değildir.
+Fonksiyon yeniden tanımlanmadı — canlıdaki gövde depodakiyle BİREBİR aynı
+(`pg_get_functiondef` md5 `a97bbf31…` yerelde ve canlıda eşit).
+
+**✅ Göç CANLIYA UYGULANDI (11.11.2026, aynı gün 3. tur).** MCP bağlantısı
+`--read-only` olduğu için uygulamayı Serhat Bey Supabase SQL editöründen yaptı;
+sonucun ölçümü en üstteki 3. tur kaydında.
+
+**Ölçüldü (yerel yığın, PG 17.11 + pg_cron 1.6.4 — canlının aynısı):**
+- Temiz başlangıçtan (uzantı düşürülüp) **3 ardışık koşum, üçü de çıkış kodu 0**;
+  `cron.job`'da tek satır, zamanlama ve komut doğru.
+- `prune_telemetry(30)`: kasten eskitilmiş 12 satır (40 ve 31 günlük) **silindi**,
+  29 günlük 3 satır ve yeni 2 satır **bırakıldı**; ikinci çağrı 0 sildi;
+  `prune_telemetry(0)` → `p_keep_days >= 1 olmali` hatası atıyor.
+- Uçtan uca: dakikalık sınav işi kurulup beklendi → `cron.job_run_details`
+  `status=succeeded`, `username=postgres`, 7 ms. Sınav işi kaldırıldı.
+- `cron.timezone` = **GMT** → `17 3 * * *` UTC'dir, TR 06:17.
+
+**İki tuzak (ikisi de ölçümle bulundu, ayrıntı developer derslerinde):**
+1. **Supabase belgesindeki elle `grant` satırlarını göçe YAZMAYIN.**
+   `create extension pg_cron` Supabase'in `issue_pg_cron_access` olay tetiğini
+   ateşliyor, tetik yetkileri kendi kuruyor. Elle grant yazılınca 2. koşum
+   `ERROR: dependent privileges exist` ile düşüyor. Grant'ler çıkarıldı.
+2. **🔴 AÇIK BULGU → 2. TURDA KAPATILDI** (göç `20261111211500_…`, yukarıdaki
+   2. tur kaydı; canlıya 3. turda uygulandı): `kombi_init.sql:166`
+   yorumu "panel kullanıcısı veri SİLEMEZ" diyor, **doğru değil.** Canlıda
+   ölçüldü: `prune_telemetry` ACL'i `authenticated=X/postgres` taşıyor,
+   `has_function_privilege('authenticated', …, 'EXECUTE')` = **true**. Giriş
+   yapmış panel kullanıcısı `prune_telemetry(1)` çağırıp geçmişi silebilir.
+   `revoke all … from public` PUBLIC payını alır, rolün kendi bağışını almaz.
+   Düzeltme ayrı bir göç + Serhat Bey onayı ister.
+
+**Canlı durum (11.11, ölçüm):** `telemetry` 31.874 satır / 5.688 kB, en eski
+`2026-10-14 20:46` (28 gün) → **30 günden eski satır sayısı 0**, yani ilk koşum
+hiçbir şey silmeyecek. İlk gerçek silme ~13.11'de başlar.
+
+**Yan not:** yerel dev yığınında temizlik sorgum `temp_c in (19.7,19.8)` ile
+yazıldığı için kendi sınav satırlarımın yanında **16 tohum satırını da sildi**
+(3663 → 3647). Canlıya dokunmadı; yerel tohum `node tests/seed_demo.mjs` ile
+yeniden üretilebilir.
+
+---
+
 ## 10.11.2026 (3. tur) — Kod denetiminin BLOK'u kapatıldı; kartın kendi testleri yazıldı
 
 Tasarım 2. turda ONAY verdi; kod denetimi BLOK verdi. Hepsi bu turda kapandı,
@@ -90,8 +281,10 @@ yarısını geçmiyor, cihazın sustuğu süre 24 saati aşınca gün olarak yaz
 3. Tohumun idempotentliği 26 saatle sınırlı (daha eski ölçüm satırları kalır).
 4. Tohumun bastığı bağımsız sayımlar (`satir/yanan/bugunYanan`) panel testinde
    tüketilmiyor; D22 sayımı sunucudan kendisi çekiyor.
-5. Canlı Supabase'in Max rows ayarı (Serhat Bey'in tıkı) ve `prune_telemetry`
-   cron'u hâlâ kurulmadı — kart artık ikisine de söz vermiyor.
+5. Canlı Supabase'in Max rows ayarı: **2000 yapıldı** (3. tur) — kart zaten buna
+   söz vermiyordu. `prune_telemetry` cron'u **artık kuruldu** (3. tur); ekrandaki
+   "30 günden eskisi bu ekranda gösterilmiyor" cümlesi yine de doğru ve fazla
+   söz vermiyor, **değiştirilmedi.**
 
 ---
 

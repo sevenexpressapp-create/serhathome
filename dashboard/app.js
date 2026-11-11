@@ -200,6 +200,10 @@ async function refresh() {
       // geliyordu: grafigin sag ucu saatler once bitiyor, "su an yaniyor"
       // suresi olmayan bir ani anlatiyordu. Artik tavan isirirsa kaybedilen
       // kisim GECMISIN ESKISI olur, simdiki an degil.
+      // 11.11.2026: canli projenin tavani 2.000'e cikarildi (Serhat Bey, Supabase
+      // panelinden; ayar veritabaninda durmadigi icin KODDAN OLCULEMEZ). Azalan
+      // siralama yine de KALIYOR: tavan projeye gore degisiyor, kadans
+      // degisebiliyor ve yanlis uc kaybetmek sessiz bir hata olurdu.
       sb.from("telemetry").select("ts, temp_c, humidity, relay_on, target_c")
         .eq("device_id", device.id).gte("ts", sinceIso)
         .order("ts", { ascending: false }).abortSignal(ac.signal),
@@ -917,8 +921,13 @@ function renderBurn() {
   $("burn-note").textContent =
     (burnCounts && burnCounts.kapsamUyari ? burnCounts.kapsamUyari + " " : "") +
     "Süreler dakikaya yuvarlanır; her yanma için 1 dakikaya kadar sapabilir. " +
-    // Budama isi (pg_cron) henuz KURULMADI; "30 gun tutulur" tutulamayacak
-    // bir sozdu. Bu cumle yalniz ekranin kendi kapsamini anlatiyor.
+    // Budama isi (pg_cron): goc 11.11.2026'da YAZILDI
+    // (supabase/migrations/20261111180000_telemetri_budama_cron.sql) ama
+    // CANLIYA HENUZ UYGULANMADI (Serhat Bey onayinda). Yani "30 gun tutulur"
+    // hala verilemeyecek bir soz. Asagidaki cumle BILEREK yalniz ekranin kendi
+    // kapsamini anlatiyor; budama canliya girse bile bu metin dogru kalir
+    // (silme `ts < now()-30g`, ekran `ts >= now()-30g` — tam tumleyen).
+    // ⚠️ Ekran metnini degistirmeyin; degisen sey yalniz bu yorumun durumu.
     "30 günden eskisi bu ekranda gösterilmiyor.";
 }
 
